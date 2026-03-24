@@ -417,6 +417,13 @@ export class ApiSessionClient extends EventEmitter {
         type: 'message'
         message: string
     } | {
+        type: 'turn-complete'
+    } | {
+        type: 'turn-failed'
+        error?: string
+    } | {
+        type: 'turn-aborted'
+    } | {
         type: 'permission-mode-changed'
         mode: SessionPermissionMode
     } | {

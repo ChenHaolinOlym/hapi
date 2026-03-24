@@ -20,11 +20,13 @@ interface PermissionResponse {
     approved: boolean;
     decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort';
     reason?: string;
+    answers?: Record<string, string[]> | Record<string, { answers: string[] }>;
 }
 
 interface PermissionResult {
     decision: 'approved' | 'approved_for_session' | 'denied' | 'abort';
     reason?: string;
+    answers?: Record<string, string[]> | Record<string, { answers: string[] }>;
 }
 
 type CodexPermissionHandlerOptions = {
@@ -36,10 +38,19 @@ type CodexPermissionHandlerOptions = {
         approved: boolean;
         decision: PermissionResult['decision'];
         reason?: string;
+        answers?: PermissionResult['answers'];
     }) => void;
 };
 
+function hasAnswers(
+    answers: PermissionResponse['answers']
+): answers is NonNullable<PermissionResponse['answers']> {
+    return answers !== undefined && Object.keys(answers).length > 0;
+}
+
 export class CodexPermissionHandler extends BasePermissionHandler<PermissionResponse, PermissionResult> {
+    private readonly sessionApprovedTools = new Set<string>();
+
     constructor(
         session: ApiSessionClient,
         private readonly getPermissionMode: () => CodexPermissionMode | undefined,
@@ -102,7 +113,10 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
         input: unknown
     ): Promise<PermissionResult> {
         const mode = this.getPermissionMode() ?? 'default';
-        const autoDecision = this.resolveAutoApprovalDecision(mode, toolName, toolCallId);
+        const normalizedToolName = toolName.toLowerCase();
+        const autoDecision = this.sessionApprovedTools.has(normalizedToolName)
+            ? 'approved_for_session'
+            : this.resolveAutoApprovalDecision(mode, toolName, toolCallId);
         if (autoDecision) {
             return Promise.resolve(this.completeAutoApproval(toolCallId, toolName, input, autoDecision));
         }
@@ -127,6 +141,16 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
         });
     }
 
+    async handleUserInputRequest(
+        requestId: string,
+        input: unknown
+    ): Promise<PermissionResult> {
+        return new Promise<PermissionResult>((resolve, reject) => {
+            this.addPendingRequest(requestId, 'request_user_input', input, { resolve, reject });
+            logger.debug(`[Codex] User input request sent (${requestId})`);
+        });
+    }
+
     /**
      * Handle permission responses
      */
@@ -134,16 +158,57 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
         response: PermissionResponse,
         pending: PendingPermissionRequest<PermissionResult>
     ): Promise<PermissionCompletion> {
+        if (pending.toolName === 'request_user_input') {
+            const approved = response.approved && hasAnswers(response.answers);
+            const result: PermissionResult = approved
+                ? {
+                    decision: 'approved',
+                    reason: typeof response.reason === 'string' ? response.reason : undefined,
+                    answers: response.answers
+                }
+                : {
+                    decision: response.decision === 'abort' ? 'abort' : 'denied',
+                    reason: typeof response.reason === 'string' ? response.reason : 'No answers were provided.'
+                };
+
+            pending.resolve(result);
+            logger.debug(`[Codex] User-input request ${approved ? 'approved' : 'rejected'} for ${pending.toolName}`);
+
+            this.options?.onComplete?.({
+                id: response.id,
+                toolName: pending.toolName,
+                input: pending.input,
+                approved,
+                decision: result.decision,
+                reason: result.reason,
+                answers: result.answers
+            });
+
+            return {
+                status: approved ? 'approved' : result.decision === 'abort' ? 'canceled' : 'denied',
+                decision: result.decision,
+                reason: result.reason,
+                answers: result.answers
+            };
+        }
+
         const reason = typeof response.reason === 'string' ? response.reason : undefined;
+        const answers = response.answers;
         const result: PermissionResult = response.approved
             ? {
                 decision: response.decision === 'approved_for_session' ? 'approved_for_session' : 'approved',
-                reason
+                reason,
+                answers
             }
             : {
                 decision: response.decision === 'denied' ? 'denied' : 'abort',
-                reason
+                reason,
+                answers
             };
+
+        if (response.approved && result.decision === 'approved_for_session') {
+            this.sessionApprovedTools.add(pending.toolName.toLowerCase());
+        }
 
         pending.resolve(result);
         logger.debug(`[Codex] Permission ${response.approved ? 'approved' : 'denied'} for ${pending.toolName}`);
@@ -154,13 +219,15 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
             input: pending.input,
             approved: response.approved,
             decision: result.decision,
-            reason: result.reason
+            reason: result.reason,
+            answers: result.answers
         });
 
         return {
-            status: response.approved ? 'approved' : 'denied',
+            status: response.approved ? 'approved' : result.decision === 'abort' ? 'canceled' : 'denied',
             decision: result.decision,
-            reason: result.reason
+            reason: result.reason,
+            answers: result.answers
         };
     }
 
@@ -176,6 +243,7 @@ export class CodexPermissionHandler extends BasePermissionHandler<PermissionResp
             completedReason: 'Session reset',
             rejectMessage: 'Session reset'
         });
+        this.sessionApprovedTools.clear();
 
         logger.debug('[Codex] Permission handler reset');
     }

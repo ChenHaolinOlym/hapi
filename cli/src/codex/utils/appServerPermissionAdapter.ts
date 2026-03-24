@@ -10,6 +10,13 @@ type PermissionResult = {
     reason?: string;
 };
 
+type UserInputAnswers = Record<string, string[]> | Record<string, { answers: string[] }>;
+
+type UserInputResult = {
+    decision?: PermissionDecision;
+    answers?: UserInputAnswers;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object') {
         return null;
@@ -34,10 +41,18 @@ function mapDecision(decision: PermissionDecision): { decision: string } {
     }
 }
 
+function isUserInputResult(value: unknown): value is UserInputResult {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+
+    return 'decision' in value || 'answers' in value;
+}
+
 export function registerAppServerPermissionHandlers(args: {
     client: CodexAppServerClient;
     permissionHandler: CodexPermissionHandler;
-    onUserInputRequest?: (request: unknown) => Promise<Record<string, string[]>>;
+    onUserInputRequest?: (request: unknown) => Promise<UserInputAnswers | UserInputResult>;
 }): void {
     const { client, permissionHandler, onUserInputRequest } = args;
 
@@ -85,10 +100,22 @@ export function registerAppServerPermissionHandlers(args: {
             return { decision: 'cancel' };
         }
 
-        const answers = await onUserInputRequest(params);
+        const result = await onUserInputRequest(params);
+        if (isUserInputResult(result)) {
+            const decision = result.decision ?? 'approved';
+            if (decision !== 'approved') {
+                return mapDecision(decision);
+            }
+
+            return {
+                decision: 'accept',
+                answers: result.answers ?? {}
+            };
+        }
+
         return {
             decision: 'accept',
-            answers
+            answers: result
         };
     });
 }

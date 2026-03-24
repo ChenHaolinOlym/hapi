@@ -26,7 +26,7 @@
  */
 
 import { spawn, SpawnOptions, type ChildProcess } from 'child_process';
-import { join, isAbsolute, resolve, win32 } from 'node:path';
+import { basename, join, isAbsolute, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isBunCompiled, projectPath } from '@/projectPath';
 import { logger } from '@/ui/logger';
@@ -83,7 +83,8 @@ export function getHappyCliCommand(args: string[]): HappyCliCommand {
   // Development mode: spawn with TypeScript entrypoint
   const projectRoot = projectPath();
   const entrypoint = resolveEntrypoint(projectRoot);
-  const isBunRuntime = Boolean((process.versions as Record<string, string | undefined>).bun);
+  const execBase = basename(process.execPath).toLowerCase();
+  const isBunRuntime = execBase === 'bun' || execBase === 'bun.exe';
 
   if (isBunRuntime) {
     // Bun can run TypeScript directly.

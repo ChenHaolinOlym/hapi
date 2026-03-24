@@ -9,12 +9,17 @@
  */
 
 import { createConfiguration, type ConfigSource } from './configuration'
+import { persistFeishuOperatorOpenId } from './config/settings'
 import { Store } from './store'
 import { SyncEngine, type SyncEvent } from './sync/syncEngine'
 import { NotificationHub } from './notifications/notificationHub'
 import type { NotificationChannel } from './notifications/notificationTypes'
 import { HappyBot } from './telegram/bot'
 import { startWebServer } from './web/server'
+import { FeishuBridgeController } from './feishu/controller'
+import { FeishuClient } from './feishu/client'
+import { FeishuBridgeRuntime } from './feishu/runtime'
+import { FeishuWebSocketTransport } from './feishu/websocketTransport'
 import { getOrCreateJwtSecret } from './config/jwtSecret'
 import { createSocketServer } from './socket/server'
 import { SSEManager } from './sse/sseManager'
@@ -104,6 +109,9 @@ let sseManager: SSEManager | null = null
 let visibilityTracker: VisibilityTracker | null = null
 let notificationHub: NotificationHub | null = null
 let tunnelManager: TunnelManager | null = null
+let feishuBridgeController: FeishuBridgeController | null = null
+let feishuBridgeRuntime: FeishuBridgeRuntime | null = null
+let feishuWebSocketTransport: FeishuWebSocketTransport | null = null
 
 async function main() {
     console.log('HAPI Hub starting...')
@@ -184,6 +192,37 @@ async function main() {
 
     syncEngine = new SyncEngine(store, socketServer.io, socketServer.rpcRegistry, sseManager)
 
+    if (config.feishuAppId && config.feishuAppSecret) {
+        const feishuClient = new FeishuClient({
+            appId: config.feishuAppId,
+            appSecret: config.feishuAppSecret
+        })
+        feishuBridgeController = new FeishuBridgeController({
+            namespace: config.feishuNamespace,
+            operatorOpenId: config.feishuOperatorOpenId,
+            claimOperatorOpenId: async (openId: string) => {
+                await persistFeishuOperatorOpenId(config.settingsFile, openId)
+            },
+            store,
+            syncEngine,
+            client: feishuClient
+        })
+        feishuBridgeRuntime = new FeishuBridgeRuntime({
+            namespace: config.feishuNamespace,
+            store,
+            syncEngine,
+            client: feishuClient
+        })
+        feishuWebSocketTransport = new FeishuWebSocketTransport({
+            appId: config.feishuAppId,
+            appSecret: config.feishuAppSecret,
+            store,
+            onMessageEvent: (event) => feishuBridgeController?.handleMessageEvent(event)
+        })
+    }
+
+    await feishuWebSocketTransport?.start()
+
     const notificationChannels: NotificationChannel[] = [
         new PushNotificationChannel(pushService, sseManager, visibilityTracker, config.publicUrl)
     ]
@@ -214,6 +253,7 @@ async function main() {
         vapidPublicKey: vapidKeys.publicKey,
         socketEngine: socketServer.engine,
         corsOrigins,
+        onFeishuMessageEvent: (event) => feishuBridgeController?.handleMessageEvent(event),
         relayMode: relayFlag.enabled,
         officialWebUrl
     })
@@ -296,6 +336,8 @@ async function main() {
         await tunnelManager?.stop()
         await happyBot?.stop()
         notificationHub?.stop()
+        feishuWebSocketTransport?.stop()
+        feishuBridgeRuntime?.stop()
         syncEngine?.stop()
         sseManager?.stop()
         webServer?.stop()

@@ -33,6 +33,12 @@ export type ConfigSource = 'env' | 'file' | 'default'
 export interface ConfigSources {
     telegramBotToken: ConfigSource
     telegramNotification: ConfigSource
+    feishuAppId: ConfigSource
+    feishuAppSecret: ConfigSource
+    feishuVerificationToken: ConfigSource
+    feishuEncryptKey: ConfigSource
+    feishuOperatorOpenId: ConfigSource
+    feishuNamespace: ConfigSource
     listenHost: ConfigSource
     listenPort: ConfigSource
     publicUrl: ConfigSource
@@ -49,6 +55,24 @@ class Configuration {
 
     /** Telegram notifications enabled */
     public readonly telegramNotification: boolean
+
+    /** Feishu callback verification token */
+    public readonly feishuVerificationToken: string | null
+
+    /** Feishu callback encrypt key */
+    public readonly feishuEncryptKey: string | null
+
+    /** Feishu app id for outbound API calls */
+    public readonly feishuAppId: string | null
+
+    /** Feishu app secret for outbound API calls */
+    public readonly feishuAppSecret: string | null
+
+    /** Feishu operator open id allowlist for MVP */
+    public readonly feishuOperatorOpenId: string | null
+
+    /** Namespace controlled by the Feishu bridge */
+    public readonly feishuNamespace: string
 
     /** CLI auth token (shared secret) */
     public cliApiToken: string
@@ -98,6 +122,12 @@ class Configuration {
         this.telegramBotToken = serverSettings.telegramBotToken
         this.telegramEnabled = Boolean(this.telegramBotToken)
         this.telegramNotification = serverSettings.telegramNotification
+        this.feishuAppId = serverSettings.feishuAppId
+        this.feishuAppSecret = serverSettings.feishuAppSecret
+        this.feishuVerificationToken = serverSettings.feishuVerificationToken
+        this.feishuEncryptKey = serverSettings.feishuEncryptKey
+        this.feishuOperatorOpenId = serverSettings.feishuOperatorOpenId
+        this.feishuNamespace = serverSettings.feishuNamespace
         this.listenHost = serverSettings.listenHost
         this.listenPort = serverSettings.listenPort
         this.publicUrl = serverSettings.publicUrl

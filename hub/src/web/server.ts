@@ -27,6 +27,8 @@ import type { WebSocketData } from '@socket.io/bun-engine'
 import { loadEmbeddedAssetMap, type EmbeddedWebAsset } from './embeddedAssets'
 import { isBunCompiled } from '../utils/bunCompiled'
 import type { Store } from '../store'
+import { createFeishuRoutes } from '../feishu/routes'
+import type { FeishuInboundMessageEvent } from '../feishu/types'
 
 function findWebappDistDir(): { distDir: string; indexHtmlPath: string } {
     const candidates = [
@@ -63,6 +65,7 @@ function createWebApp(options: {
     vapidPublicKey: string
     corsOrigins?: string[]
     embeddedAssetMap: Map<string, EmbeddedWebAsset> | null
+    onFeishuMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
     relayMode?: boolean
     officialWebUrl?: string
 }): Hono<WebAppEnv> {
@@ -82,6 +85,15 @@ function createWebApp(options: {
     })
     app.use('/api/*', corsMiddleware)
     app.use('/cli/*', corsMiddleware)
+
+    app.route('/feishu', createFeishuRoutes({
+        store: options.store,
+        config: {
+            verificationToken: configuration.feishuVerificationToken,
+            encryptKey: configuration.feishuEncryptKey
+        },
+        onMessageEvent: options.onFeishuMessageEvent
+    }))
 
     app.route('/cli', createCliRoutes(options.getSyncEngine))
 
@@ -210,6 +222,7 @@ export async function startWebServer(options: {
     vapidPublicKey: string
     socketEngine: SocketEngine
     corsOrigins?: string[]
+    onFeishuMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
     relayMode?: boolean
     officialWebUrl?: string
 }): Promise<BunServer<WebSocketData>> {
@@ -223,6 +236,7 @@ export async function startWebServer(options: {
         store: options.store,
         vapidPublicKey: options.vapidPublicKey,
         corsOrigins: options.corsOrigins,
+        onFeishuMessageEvent: options.onFeishuMessageEvent,
         embeddedAssetMap,
         relayMode: options.relayMode,
         officialWebUrl: options.officialWebUrl

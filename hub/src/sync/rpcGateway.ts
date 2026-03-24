@@ -45,10 +45,19 @@ export type RpcPathExistsResponse = {
 }
 
 export class RpcGateway {
+    private readonly registrationWaitMs: number
+    private readonly registrationPollMs: number
+
     constructor(
         private readonly io: Server,
-        private readonly rpcRegistry: RpcRegistry
+        private readonly rpcRegistry: RpcRegistry,
+        options?: {
+            registrationWaitMs?: number
+            registrationPollMs?: number
+        }
     ) {
+        this.registrationWaitMs = options?.registrationWaitMs ?? 5_000
+        this.registrationPollMs = options?.registrationPollMs ?? 50
     }
 
     async approvePermission(
@@ -97,7 +106,9 @@ export class RpcGateway {
             collaborationMode?: CodexCollaborationMode
         }
     ): Promise<unknown> {
-        return await this.sessionRpc(sessionId, 'set-session-config', config)
+        return await this.sessionRpc(sessionId, 'set-session-config', config, {
+            waitForRegistrationMs: this.registrationWaitMs
+        })
     }
 
     async killSession(sessionId: string): Promise<void> {
@@ -228,16 +239,29 @@ export class RpcGateway {
         }
     }
 
-    private async sessionRpc(sessionId: string, method: string, params: unknown): Promise<unknown> {
-        return await this.rpcCall(`${sessionId}:${method}`, params)
+    private async sessionRpc(
+        sessionId: string,
+        method: string,
+        params: unknown,
+        options?: {
+            waitForRegistrationMs?: number
+        }
+    ): Promise<unknown> {
+        return await this.rpcCall(`${sessionId}:${method}`, params, options)
     }
 
     private async machineRpc(machineId: string, method: string, params: unknown): Promise<unknown> {
         return await this.rpcCall(`${machineId}:${method}`, params)
     }
 
-    private async rpcCall(method: string, params: unknown): Promise<unknown> {
-        const socketId = this.rpcRegistry.getSocketIdForMethod(method)
+    private async rpcCall(
+        method: string,
+        params: unknown,
+        options?: {
+            waitForRegistrationMs?: number
+        }
+    ): Promise<unknown> {
+        const socketId = await this.waitForRegisteredSocketId(method, options?.waitForRegistrationMs)
         if (!socketId) {
             throw new Error(`RPC handler not registered: ${method}`)
         }
@@ -261,5 +285,26 @@ export class RpcGateway {
         } catch {
             return response
         }
+    }
+
+    private async waitForRegisteredSocketId(
+        method: string,
+        waitForRegistrationMs: number | undefined
+    ): Promise<string | null> {
+        const immediate = this.rpcRegistry.getSocketIdForMethod(method)
+        if (immediate || !waitForRegistrationMs || waitForRegistrationMs <= 0) {
+            return immediate
+        }
+
+        const start = Date.now()
+        while (Date.now() - start < waitForRegistrationMs) {
+            const socketId = this.rpcRegistry.getSocketIdForMethod(method)
+            if (socketId) {
+                return socketId
+            }
+            await new Promise((resolve) => setTimeout(resolve, this.registrationPollMs))
+        }
+
+        return this.rpcRegistry.getSocketIdForMethod(method)
     }
 }

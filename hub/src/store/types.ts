@@ -59,6 +59,49 @@ export type StoredPushSubscription = {
     createdAt: number
 }
 
+export type StoredFeishuThread = {
+    namespace: string
+    chatId: string
+    rootMessageId: string
+    sessionId: string
+    operatorOpenId: string
+    machineId: string | null
+    repoPath: string
+    sessionName: string | null
+    model: string | null
+    permissionMode: 'default' | 'read-only' | 'safe-yolo' | 'yolo'
+    collaborationMode: 'default' | 'plan'
+    deliveryMode: 'foreground' | 'background'
+    phase: 'planning' | 'executing'
+    attention: 'none' | 'approval' | 'question' | 'failure' | 'completion'
+    lastForwardedSeq: number | null
+    activeTurnSeq: number | null
+    lastSeenReadyAt: number | null
+    createdAt: number
+    updatedAt: number
+}
+
+export type StoredFeishuRequest = {
+    namespace: string
+    sessionId: string
+    requestId: string
+    shortToken: string
+    kind: 'permission' | 'question'
+    decisionScope: 'request' | 'session'
+    answerShape: 'flat' | 'nested'
+    feishuMessageId: string | null
+    requestJson: string
+    status: 'open' | 'resolved' | 'stale'
+    createdAt: number
+    resolvedAt: number | null
+}
+
+export type StoredFeishuSeenEvent = {
+    source: 'message' | 'card' | 'callback'
+    externalEventId: string
+    seenAt: number
+}
+
 export type VersionedUpdateResult<T> =
     | { result: 'success'; version: number; value: T }
     | { result: 'version-mismatch'; version: number; value: T }

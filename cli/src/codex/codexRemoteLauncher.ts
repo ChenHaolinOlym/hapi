@@ -177,6 +177,17 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 : undefined;
         }, {
             onRequest: ({ id, toolName, input }) => {
+                if (toolName === 'request_user_input') {
+                    session.sendAgentMessage({
+                        type: 'tool-call',
+                        name: toolName,
+                        callId: id,
+                        input,
+                        id: randomUUID()
+                    });
+                    return;
+                }
+
                 const inputRecord = input && typeof input === 'object' ? input as Record<string, unknown> : {};
                 const message = typeof inputRecord.message === 'string' ? inputRecord.message : undefined;
                 const rawCommand = inputRecord.command;
@@ -201,13 +212,14 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                     id: randomUUID()
                 });
             },
-            onComplete: ({ id, decision, reason, approved }) => {
+            onComplete: ({ id, decision, reason, approved, answers }) => {
                 session.sendAgentMessage({
                     type: 'tool-call-result',
                     callId: id,
                     output: {
                         decision,
-                        reason
+                        reason,
+                        answers
                     },
                     is_error: !approved,
                     id: randomUUID()
@@ -297,11 +309,17 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 messageBuffer.addMessage('Starting task...', 'status');
             } else if (msgType === 'task_complete') {
                 messageBuffer.addMessage('Task completed', 'status');
+                session.sendSessionEvent({ type: 'turn-complete' });
             } else if (msgType === 'turn_aborted') {
                 messageBuffer.addMessage('Turn aborted', 'status');
+                session.sendSessionEvent({ type: 'turn-aborted' });
             } else if (msgType === 'task_failed') {
                 const error = asString(msg.error);
                 messageBuffer.addMessage(error ? `Task failed: ${error}` : 'Task failed', 'status');
+                session.sendSessionEvent({
+                    type: 'turn-failed',
+                    ...(error ? { error } : {})
+                });
             }
 
             if (msgType === 'task_started') {
@@ -495,7 +513,17 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
 
         registerAppServerPermissionHandlers({
             client: appServerClient,
-            permissionHandler
+            permissionHandler,
+            onUserInputRequest: async (request) => {
+                const requestRecord = asRecord(request) ?? {};
+                const requestId = asString(
+                    requestRecord.itemId
+                    ?? requestRecord.item_id
+                    ?? requestRecord.id
+                ) ?? asString(asRecord(requestRecord.item)?.id) ?? randomUUID();
+                const result = await permissionHandler.handleUserInputRequest(requestId, request);
+                return result;
+            }
         });
 
         appServerClient.setNotificationHandler((method, params) => {
@@ -691,7 +719,6 @@ class CodexRemoteLauncher extends RemoteLauncherBase {
                 }
             } finally {
                 if (!turnInFlight) {
-                    permissionHandler.reset();
                     reasoningProcessor.abort();
                     diffProcessor.reset();
                     appServerEventConverter.reset();

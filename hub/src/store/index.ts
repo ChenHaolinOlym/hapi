@@ -2,6 +2,9 @@ import { Database } from 'bun:sqlite'
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { FeishuEventStore } from './feishuEventStore'
+import { FeishuRequestStore } from './feishuRequestStore'
+import { FeishuThreadStore } from './feishuThreadStore'
 import { MachineStore } from './machineStore'
 import { MessageStore } from './messageStore'
 import { PushStore } from './pushStore'
@@ -9,6 +12,9 @@ import { SessionStore } from './sessionStore'
 import { UserStore } from './userStore'
 
 export type {
+    StoredFeishuRequest,
+    StoredFeishuSeenEvent,
+    StoredFeishuThread,
     StoredMachine,
     StoredMessage,
     StoredPushSubscription,
@@ -16,19 +22,25 @@ export type {
     StoredUser,
     VersionedUpdateResult
 } from './types'
+export { FeishuEventStore } from './feishuEventStore'
+export { FeishuRequestStore } from './feishuRequestStore'
+export { FeishuThreadStore } from './feishuThreadStore'
 export { MachineStore } from './machineStore'
 export { MessageStore } from './messageStore'
 export { PushStore } from './pushStore'
 export { SessionStore } from './sessionStore'
 export { UserStore } from './userStore'
 
-const SCHEMA_VERSION: number = 5
+const SCHEMA_VERSION: number = 7
 const REQUIRED_TABLES = [
     'sessions',
     'machines',
     'messages',
     'users',
-    'push_subscriptions'
+    'push_subscriptions',
+    'feishu_threads',
+    'feishu_requests',
+    'feishu_seen_events'
 ] as const
 
 export class Store {
@@ -40,6 +52,9 @@ export class Store {
     readonly messages: MessageStore
     readonly users: UserStore
     readonly push: PushStore
+    readonly feishuThreads: FeishuThreadStore
+    readonly feishuRequests: FeishuRequestStore
+    readonly feishuEvents: FeishuEventStore
 
     constructor(dbPath: string) {
         this.dbPath = dbPath
@@ -81,6 +96,9 @@ export class Store {
         this.messages = new MessageStore(this.db)
         this.users = new UserStore(this.db)
         this.push = new PushStore(this.db)
+        this.feishuThreads = new FeishuThreadStore(this.db)
+        this.feishuRequests = new FeishuRequestStore(this.db)
+        this.feishuEvents = new FeishuEventStore(this.db)
     }
 
     private initSchema(): void {
@@ -118,6 +136,25 @@ export class Store {
 
         if (currentVersion === 4 && SCHEMA_VERSION === 5) {
             this.migrateFromV4ToV5()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 6) {
+            this.migrateFromV5ToV6()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 7) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 7) {
+            this.migrateFromV6ToV7()
             this.setUserVersion(SCHEMA_VERSION)
             return
         }
@@ -202,6 +239,55 @@ export class Store {
                 UNIQUE(namespace, endpoint)
             );
             CREATE INDEX IF NOT EXISTS idx_push_subscriptions_namespace ON push_subscriptions(namespace);
+
+            CREATE TABLE IF NOT EXISTS feishu_threads (
+                namespace TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                root_message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                operator_open_id TEXT NOT NULL,
+                machine_id TEXT,
+                repo_path TEXT NOT NULL,
+                session_name TEXT,
+                model TEXT,
+                permission_mode TEXT NOT NULL,
+                collaboration_mode TEXT NOT NULL,
+                delivery_mode TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                attention TEXT NOT NULL,
+                last_forwarded_seq INTEGER,
+                active_turn_seq INTEGER,
+                last_seen_ready_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (namespace, chat_id, root_message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_threads_session ON feishu_threads(namespace, session_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_threads_unique_session ON feishu_threads(namespace, session_id);
+
+            CREATE TABLE IF NOT EXISTS feishu_requests (
+                namespace TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                short_token TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                decision_scope TEXT NOT NULL,
+                answer_shape TEXT NOT NULL,
+                feishu_message_id TEXT,
+                request_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                resolved_at INTEGER,
+                PRIMARY KEY (namespace, session_id, request_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_requests_open ON feishu_requests(namespace, session_id, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS feishu_seen_events (
+                source TEXT NOT NULL,
+                external_event_id TEXT NOT NULL,
+                seen_at INTEGER NOT NULL,
+                PRIMARY KEY (source, external_event_id)
+            );
         `)
     }
 
@@ -309,6 +395,67 @@ export class Store {
         const columns = this.getSessionColumnNames()
         if (!columns.has('model')) {
             this.db.exec('ALTER TABLE sessions ADD COLUMN model TEXT')
+        }
+    }
+
+    private migrateFromV5ToV6(): void {
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS feishu_threads (
+                namespace TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                root_message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                operator_open_id TEXT NOT NULL,
+                machine_id TEXT,
+                repo_path TEXT NOT NULL,
+                session_name TEXT,
+                model TEXT,
+                permission_mode TEXT NOT NULL,
+                collaboration_mode TEXT NOT NULL,
+                delivery_mode TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                attention TEXT NOT NULL,
+                last_forwarded_seq INTEGER,
+                active_turn_seq INTEGER,
+                last_seen_ready_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (namespace, chat_id, root_message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_threads_session ON feishu_threads(namespace, session_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_threads_unique_session ON feishu_threads(namespace, session_id);
+
+            CREATE TABLE IF NOT EXISTS feishu_requests (
+                namespace TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                short_token TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                decision_scope TEXT NOT NULL,
+                answer_shape TEXT NOT NULL,
+                feishu_message_id TEXT,
+                request_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                resolved_at INTEGER,
+                PRIMARY KEY (namespace, session_id, request_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_requests_open ON feishu_requests(namespace, session_id, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS feishu_seen_events (
+                source TEXT NOT NULL,
+                external_event_id TEXT NOT NULL,
+                seen_at INTEGER NOT NULL,
+                PRIMARY KEY (source, external_event_id)
+            );
+        `)
+    }
+
+    private migrateFromV6ToV7(): void {
+        const rows = this.db.prepare('PRAGMA table_info(feishu_threads)').all() as Array<{ name: string }>
+        const columns = new Set(rows.map((row) => row.name))
+        if (!columns.has('active_turn_seq')) {
+            this.db.exec('ALTER TABLE feishu_threads ADD COLUMN active_turn_seq INTEGER')
         }
     }
 

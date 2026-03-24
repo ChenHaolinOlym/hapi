@@ -13,6 +13,12 @@ import { getSettingsFile, readSettings, writeSettings } from './settings'
 export interface ServerSettings {
     telegramBotToken: string | null
     telegramNotification: boolean
+    feishuAppId: string | null
+    feishuAppSecret: string | null
+    feishuVerificationToken: string | null
+    feishuEncryptKey: string | null
+    feishuOperatorOpenId: string | null
+    feishuNamespace: string
     listenHost: string
     listenPort: number
     publicUrl: string
@@ -24,6 +30,12 @@ export interface ServerSettingsResult {
     sources: {
         telegramBotToken: 'env' | 'file' | 'default'
         telegramNotification: 'env' | 'file' | 'default'
+        feishuAppId: 'env' | 'file' | 'default'
+        feishuAppSecret: 'env' | 'file' | 'default'
+        feishuVerificationToken: 'env' | 'file' | 'default'
+        feishuEncryptKey: 'env' | 'file' | 'default'
+        feishuOperatorOpenId: 'env' | 'file' | 'default'
+        feishuNamespace: 'env' | 'file' | 'default'
         listenHost: 'env' | 'file' | 'default'
         listenPort: 'env' | 'file' | 'default'
         publicUrl: 'env' | 'file' | 'default'
@@ -87,6 +99,12 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
     const sources: ServerSettingsResult['sources'] = {
         telegramBotToken: 'default',
         telegramNotification: 'default',
+        feishuAppId: 'default',
+        feishuAppSecret: 'default',
+        feishuVerificationToken: 'default',
+        feishuEncryptKey: 'default',
+        feishuOperatorOpenId: 'default',
+        feishuNamespace: 'default',
         listenHost: 'default',
         listenPort: 'default',
         publicUrl: 'default',
@@ -118,6 +136,84 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
     } else if (settings.telegramNotification !== undefined) {
         telegramNotification = settings.telegramNotification
         sources.telegramNotification = 'file'
+    }
+
+    let feishuAppId: string | null = null
+    if (process.env.FEISHU_APP_ID) {
+        feishuAppId = process.env.FEISHU_APP_ID
+        sources.feishuAppId = 'env'
+        if (settings.feishuAppId === undefined) {
+            settings.feishuAppId = feishuAppId
+            needsSave = true
+        }
+    } else if (settings.feishuAppId !== undefined) {
+        feishuAppId = settings.feishuAppId
+        sources.feishuAppId = 'file'
+    }
+
+    let feishuAppSecret: string | null = null
+    if (process.env.FEISHU_APP_SECRET) {
+        feishuAppSecret = process.env.FEISHU_APP_SECRET
+        sources.feishuAppSecret = 'env'
+        if (settings.feishuAppSecret === undefined) {
+            settings.feishuAppSecret = feishuAppSecret
+            needsSave = true
+        }
+    } else if (settings.feishuAppSecret !== undefined) {
+        feishuAppSecret = settings.feishuAppSecret
+        sources.feishuAppSecret = 'file'
+    }
+
+    let feishuVerificationToken: string | null = null
+    if (process.env.FEISHU_VERIFICATION_TOKEN) {
+        feishuVerificationToken = process.env.FEISHU_VERIFICATION_TOKEN
+        sources.feishuVerificationToken = 'env'
+        if (settings.feishuVerificationToken === undefined) {
+            settings.feishuVerificationToken = feishuVerificationToken
+            needsSave = true
+        }
+    } else if (settings.feishuVerificationToken !== undefined) {
+        feishuVerificationToken = settings.feishuVerificationToken
+        sources.feishuVerificationToken = 'file'
+    }
+
+    let feishuEncryptKey: string | null = null
+    if (process.env.FEISHU_ENCRYPT_KEY) {
+        feishuEncryptKey = process.env.FEISHU_ENCRYPT_KEY
+        sources.feishuEncryptKey = 'env'
+        if (settings.feishuEncryptKey === undefined) {
+            settings.feishuEncryptKey = feishuEncryptKey
+            needsSave = true
+        }
+    } else if (settings.feishuEncryptKey !== undefined) {
+        feishuEncryptKey = settings.feishuEncryptKey
+        sources.feishuEncryptKey = 'file'
+    }
+
+    let feishuOperatorOpenId: string | null = null
+    if (process.env.FEISHU_OPERATOR_OPEN_ID) {
+        feishuOperatorOpenId = process.env.FEISHU_OPERATOR_OPEN_ID
+        sources.feishuOperatorOpenId = 'env'
+        if (settings.feishuOperatorOpenId === undefined) {
+            settings.feishuOperatorOpenId = feishuOperatorOpenId
+            needsSave = true
+        }
+    } else if (settings.feishuOperatorOpenId !== undefined) {
+        feishuOperatorOpenId = settings.feishuOperatorOpenId
+        sources.feishuOperatorOpenId = 'file'
+    }
+
+    let feishuNamespace = 'default'
+    if (process.env.FEISHU_NAMESPACE) {
+        feishuNamespace = process.env.FEISHU_NAMESPACE
+        sources.feishuNamespace = 'env'
+        if (settings.feishuNamespace === undefined) {
+            settings.feishuNamespace = feishuNamespace
+            needsSave = true
+        }
+    } else if (settings.feishuNamespace !== undefined) {
+        feishuNamespace = settings.feishuNamespace
+        sources.feishuNamespace = 'file'
     }
 
     // listenHost: env > file (new or old name) > default
@@ -212,6 +308,12 @@ export async function loadServerSettings(dataDir: string): Promise<ServerSetting
         settings: {
             telegramBotToken,
             telegramNotification,
+            feishuAppId,
+            feishuAppSecret,
+            feishuVerificationToken,
+            feishuEncryptKey,
+            feishuOperatorOpenId,
+            feishuNamespace,
             listenHost,
             listenPort,
             publicUrl,

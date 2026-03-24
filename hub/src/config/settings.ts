@@ -14,6 +14,12 @@ export interface Settings {
     // Server configuration (persisted from environment variables)
     telegramBotToken?: string
     telegramNotification?: boolean
+    feishuAppId?: string
+    feishuAppSecret?: string
+    feishuVerificationToken?: string
+    feishuEncryptKey?: string
+    feishuOperatorOpenId?: string
+    feishuNamespace?: string
     listenHost?: string
     listenPort?: number
     publicUrl?: string
@@ -68,4 +74,15 @@ export async function writeSettings(settingsFile: string, settings: Settings): P
     const tmpFile = settingsFile + '.tmp'
     await writeFile(tmpFile, JSON.stringify(settings, null, 2))
     await rename(tmpFile, settingsFile)
+}
+
+export async function persistFeishuOperatorOpenId(settingsFile: string, openId: string): Promise<void> {
+    const normalizedOpenId = openId.trim()
+    if (!normalizedOpenId) {
+        throw new Error('Feishu operator open id must not be empty')
+    }
+
+    const settings = await readSettingsOrThrow(settingsFile)
+    settings.feishuOperatorOpenId = normalizedOpenId
+    await writeSettings(settingsFile, settings)
 }
