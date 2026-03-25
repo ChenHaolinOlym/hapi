@@ -316,6 +316,11 @@ export class SessionCache {
             throw new Error('Failed to delete session')
         }
 
+        for (const request of this.store.feishuRequests.listOpenRequestsForSession(session.namespace, sessionId)) {
+            this.store.feishuRequests.markStale(session.namespace, sessionId, request.requestId)
+        }
+        this.store.feishuThreads.deleteThreadsBySessionId(session.namespace, sessionId)
+
         this.sessions.delete(sessionId)
         this.lastBroadcastAtBySessionId.delete(sessionId)
         this.todoBackfillAttemptedSessionIds.delete(sessionId)
@@ -332,6 +337,12 @@ export class SessionCache {
         const newStored = this.store.sessions.getSessionByNamespace(newSessionId, namespace)
         if (!oldStored || !newStored) {
             throw new Error('Session not found for merge')
+        }
+
+        const oldFeishuBinding = this.store.feishuThreads.getThreadBySessionId(namespace, oldSessionId)
+        const newFeishuBinding = this.store.feishuThreads.getThreadBySessionId(namespace, newSessionId)
+        if (oldFeishuBinding && newFeishuBinding) {
+            throw new Error(`Cannot merge session ${oldSessionId} into ${newSessionId}; Feishu binding already exists.`)
         }
 
         this.store.messages.mergeSessionMessages(oldSessionId, newSessionId)
@@ -383,6 +394,24 @@ export class SessionCache {
                 namespace
             )
         }
+
+        for (const request of this.store.feishuRequests.listOpenRequestsForSession(namespace, oldSessionId)) {
+            this.store.feishuRequests.upsertRequest({
+                namespace,
+                sessionId: newSessionId,
+                requestId: request.requestId,
+                shortToken: request.shortToken,
+                kind: request.kind,
+                decisionScope: request.decisionScope,
+                answerShape: request.answerShape,
+                feishuMessageId: request.feishuMessageId,
+                requestJson: request.requestJson,
+                status: 'open'
+            })
+            this.store.feishuRequests.markStale(namespace, oldSessionId, request.requestId)
+        }
+
+        this.store.feishuThreads.reassignSession(namespace, oldSessionId, newSessionId)
 
         const deleted = this.store.sessions.deleteSession(oldSessionId, namespace)
         if (!deleted) {

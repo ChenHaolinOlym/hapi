@@ -28,7 +28,7 @@ import { loadEmbeddedAssetMap, type EmbeddedWebAsset } from './embeddedAssets'
 import { isBunCompiled } from '../utils/bunCompiled'
 import type { Store } from '../store'
 import { createFeishuRoutes } from '../feishu/routes'
-import type { FeishuInboundMessageEvent } from '../feishu/types'
+import type { FeishuCardActionEvent, FeishuInboundMessageEvent } from '../feishu/types'
 
 function findWebappDistDir(): { distDir: string; indexHtmlPath: string } {
     const candidates = [
@@ -66,6 +66,7 @@ function createWebApp(options: {
     corsOrigins?: string[]
     embeddedAssetMap: Map<string, EmbeddedWebAsset> | null
     onFeishuMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
+    onFeishuCardActionEvent?: (event: FeishuCardActionEvent) => Promise<void> | void
     relayMode?: boolean
     officialWebUrl?: string
 }): Hono<WebAppEnv> {
@@ -92,7 +93,8 @@ function createWebApp(options: {
             verificationToken: configuration.feishuVerificationToken,
             encryptKey: configuration.feishuEncryptKey
         },
-        onMessageEvent: options.onFeishuMessageEvent
+        onMessageEvent: options.onFeishuMessageEvent,
+        onCardActionEvent: options.onFeishuCardActionEvent
     }))
 
     app.route('/cli', createCliRoutes(options.getSyncEngine))
@@ -223,6 +225,7 @@ export async function startWebServer(options: {
     socketEngine: SocketEngine
     corsOrigins?: string[]
     onFeishuMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
+    onFeishuCardActionEvent?: (event: FeishuCardActionEvent) => Promise<void> | void
     relayMode?: boolean
     officialWebUrl?: string
 }): Promise<BunServer<WebSocketData>> {
@@ -237,6 +240,7 @@ export async function startWebServer(options: {
         vapidPublicKey: options.vapidPublicKey,
         corsOrigins: options.corsOrigins,
         onFeishuMessageEvent: options.onFeishuMessageEvent,
+        onFeishuCardActionEvent: options.onFeishuCardActionEvent,
         embeddedAssetMap,
         relayMode: options.relayMode,
         officialWebUrl: options.officialWebUrl

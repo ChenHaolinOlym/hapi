@@ -61,6 +61,34 @@ export function listOpenFeishuRequestsForSession(
     return rows.map(toStoredFeishuRequest)
 }
 
+export function findFeishuRequestByShortToken(
+    db: Database,
+    namespace: string,
+    shortToken: string
+): StoredFeishuRequest | null {
+    const row = db.prepare(`
+        SELECT * FROM feishu_requests
+        WHERE namespace = ? AND short_token = ?
+        ORDER BY (status = 'open') DESC, created_at DESC
+        LIMIT 1
+    `).get(namespace, shortToken) as DbFeishuRequestRow | undefined
+    return row ? toStoredFeishuRequest(row) : null
+}
+
+export function findFeishuRequestByMessageId(
+    db: Database,
+    namespace: string,
+    feishuMessageId: string
+): StoredFeishuRequest | null {
+    const row = db.prepare(`
+        SELECT * FROM feishu_requests
+        WHERE namespace = ? AND feishu_message_id = ?
+        ORDER BY (status = 'open') DESC, created_at DESC
+        LIMIT 1
+    `).get(namespace, feishuMessageId) as DbFeishuRequestRow | undefined
+    return row ? toStoredFeishuRequest(row) : null
+}
+
 export function upsertFeishuRequest(
     db: Database,
     request: Omit<StoredFeishuRequest, 'createdAt' | 'resolvedAt'>

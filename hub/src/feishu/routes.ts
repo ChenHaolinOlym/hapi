@@ -2,12 +2,13 @@ import { Hono } from 'hono'
 
 import type { Store } from '../store'
 import { decryptFeishuPayload, verifyFeishuSignature } from './security'
-import type { FeishuInboundMessageEvent, FeishuWebhookConfig } from './types'
+import type { FeishuCardActionEvent, FeishuInboundMessageEvent, FeishuWebhookConfig } from './types'
 
 type CreateFeishuRoutesOptions = {
     store: Store
     config: FeishuWebhookConfig
     onMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
+    onCardActionEvent?: (event: FeishuCardActionEvent) => Promise<void> | void
 }
 
 type ParsedCallbackBody = {
@@ -127,6 +128,15 @@ type NormalizedCallbackMessageEvent =
         kind: 'invalid'
     }
 
+type NormalizedCardActionEvent =
+    | {
+        kind: 'event'
+        event: FeishuCardActionEvent
+    }
+    | {
+        kind: 'invalid'
+    }
+
 function normalizeMessageEvent(body: Record<string, unknown>): NormalizedCallbackMessageEvent {
     const header = asRecord(body.header)
     const event = asRecord(body.event)
@@ -178,6 +188,36 @@ function normalizeMessageEvent(body: Record<string, unknown>): NormalizedCallbac
     }
 }
 
+function normalizeCardActionEvent(body: Record<string, unknown>): NormalizedCardActionEvent {
+    const event = asRecord(body.event)
+    const operator = asRecord(event?.operator)
+    const operatorId = asRecord(operator?.operator_id)
+    const action = asRecord(event?.action)
+    const value = asRecord(action?.value)
+
+    const callbackToken = asString(event?.token)
+    const openId = asString(operatorId?.open_id)
+    const messageId = asString(event?.open_message_id)
+    const chatId = asString(event?.open_chat_id)
+
+    if (!callbackToken || !openId || !messageId || !chatId || !value) {
+        return {
+            kind: 'invalid'
+        }
+    }
+
+    return {
+        kind: 'event',
+        event: {
+            callbackToken,
+            openId,
+            messageId,
+            chatId,
+            action: value
+        }
+    }
+}
+
 export function createFeishuRoutes(options: CreateFeishuRoutesOptions): Hono {
     const app = new Hono()
 
@@ -214,7 +254,8 @@ export function createFeishuRoutes(options: CreateFeishuRoutesOptions): Hono {
             return c.json({ error: 'Invalid Feishu callback event' }, 400)
         }
 
-        if (options.store.feishuEvents.hasSeen('callback', eventId)) {
+        const eventSource = eventType === 'card.action.trigger' ? 'card' : 'callback'
+        if (options.store.feishuEvents.hasSeen(eventSource, eventId)) {
             return emptyOk()
         }
 
@@ -229,7 +270,16 @@ export function createFeishuRoutes(options: CreateFeishuRoutesOptions): Hono {
             }
         }
 
-        options.store.feishuEvents.markSeen('callback', eventId)
+        if (eventType === 'card.action.trigger') {
+            const normalizedEvent = normalizeCardActionEvent(parsed.body)
+            if (normalizedEvent.kind === 'invalid') {
+                return c.json({ error: 'Invalid Feishu card action event' }, 400)
+            }
+
+            await options.onCardActionEvent?.(normalizedEvent.event)
+        }
+
+        options.store.feishuEvents.markSeen(eventSource, eventId)
         return emptyOk()
     })
 

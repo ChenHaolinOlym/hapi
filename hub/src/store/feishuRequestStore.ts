@@ -2,6 +2,8 @@ import type { Database } from 'bun:sqlite'
 
 import type { StoredFeishuRequest } from './types'
 import {
+    findFeishuRequestByMessageId,
+    findFeishuRequestByShortToken,
     getFeishuRequest,
     listOpenFeishuRequestsForSession,
     markFeishuRequestResolved,
@@ -22,6 +24,14 @@ export class FeishuRequestStore {
 
     listOpenRequestsForSession(namespace: string, sessionId: string): StoredFeishuRequest[] {
         return listOpenFeishuRequestsForSession(this.db, namespace, sessionId)
+    }
+
+    findRequestByShortToken(namespace: string, shortToken: string): StoredFeishuRequest | null {
+        return findFeishuRequestByShortToken(this.db, namespace, shortToken)
+    }
+
+    findRequestByMessageId(namespace: string, feishuMessageId: string): StoredFeishuRequest | null {
+        return findFeishuRequestByMessageId(this.db, namespace, feishuMessageId)
     }
 
     upsertRequest(request: Omit<StoredFeishuRequest, 'createdAt' | 'resolvedAt'>): StoredFeishuRequest {

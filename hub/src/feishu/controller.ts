@@ -5,8 +5,8 @@ import type { SyncEngine } from '../sync/syncEngine'
 import { FeishuBridgeStateSynchronizer } from './bridge'
 import { FeishuClient } from './client'
 import { parseFeishuChatInput } from './commands'
-import { formatRequestPrompt } from './runtime'
-import type { FeishuInboundMessageEvent } from './types'
+import { renderOpenRequestCard, renderResolvedRequestCard } from './runtime'
+import type { FeishuCardActionEvent, FeishuInboundMessageEvent } from './types'
 
 type FeishuBridgeControllerOptions = {
     namespace?: string
@@ -30,7 +30,7 @@ type FeishuBridgeControllerOptions = {
         | 'abortSession'
         | 'archiveSession'
     >
-    client: Pick<FeishuClient, 'replyMessage'>
+    client: Pick<FeishuClient, 'replyMessage' | 'replyCardMessage' | 'patchMessageCard' | 'updateInteractiveCard'>
 }
 
 export class FeishuBridgeController {
@@ -94,6 +94,112 @@ export class FeishuBridgeController {
         }
 
         await this.handleBoundInput(event, binding, parsed)
+    }
+
+    async handleCardActionEvent(event: FeishuCardActionEvent): Promise<void> {
+        const operatorOpenId = await this.resolveOperatorOpenId(event.openId)
+        if (operatorOpenId && event.openId !== operatorOpenId) {
+            return
+        }
+
+        const requestToken = asString(event.action.requestToken)
+        if (!requestToken) {
+            return
+        }
+
+        const requestFromMessage = asString(event.messageId)
+            ? this.options.store.feishuRequests.findRequestByMessageId(this.namespace, event.messageId)
+            : null
+        const request = requestFromMessage?.shortToken === requestToken
+            ? requestFromMessage
+            : this.options.store.feishuRequests.findRequestByShortToken(this.namespace, requestToken)
+        if (!request || request.status !== 'open' || request.shortToken !== requestToken) {
+            return
+        }
+
+        const binding = this.options.store.feishuThreads.getThreadBySessionId(this.namespace, request.sessionId)
+        if (!binding || binding.operatorOpenId !== event.openId) {
+            return
+        }
+
+        if (asString(event.action.kind) === 'choose') {
+            if (request.kind !== 'question') {
+                return
+            }
+
+            const sessionId = await this.ensureActiveSession(binding, request.feishuMessageId ?? event.messageId)
+            if (!sessionId) {
+                return
+            }
+
+            const value = asString(event.action.value)
+            if (!value) {
+                return
+            }
+
+            const answers = buildQuestionAnswers(request, value)
+            await this.options.syncEngine.approvePermission(
+                sessionId,
+                request.requestId,
+                undefined,
+                undefined,
+                'approved',
+                answers
+            )
+            this.options.store.feishuRequests.markResolved(
+                this.namespace,
+                request.sessionId,
+                request.requestId
+            )
+            await this.syncResolvedRequestCard(request, 'Answered', event.callbackToken)
+            return
+        }
+
+        if (asString(event.action.kind) !== 'resolve-request') {
+            return
+        }
+
+        if (request.kind !== 'permission') {
+            return
+        }
+
+        const decision = asRequestDecision(event.action.decision)
+        if (!decision) {
+            return
+        }
+
+        const sessionId = await this.ensureActiveSession(binding, request.feishuMessageId ?? event.messageId)
+        if (!sessionId) {
+            return
+        }
+
+        if (decision === 'approved' || decision === 'approved_for_session') {
+            await this.options.syncEngine.approvePermission(
+                sessionId,
+                request.requestId,
+                undefined,
+                undefined,
+                decision,
+                undefined
+            )
+        } else {
+            await this.options.syncEngine.denyPermission(sessionId, request.requestId, decision)
+        }
+
+        this.options.store.feishuRequests.markResolved(
+            this.namespace,
+            request.sessionId,
+            request.requestId
+        )
+        await this.syncResolvedRequestCard(
+            request,
+            decision === 'approved' || decision === 'approved_for_session'
+                ? 'Approved'
+                : decision === 'denied'
+                    ? 'Denied'
+                    : 'Aborted',
+            event.callbackToken
+        )
     }
 
     private async resolveOperatorOpenId(eventOpenId: string): Promise<string | null> {
@@ -245,6 +351,8 @@ export class FeishuBridgeController {
             permissionMode: command.permissionMode,
             collaborationMode: command.collaborationMode,
             deliveryMode: 'foreground',
+            reasoningSummary: currentBinding?.reasoningSummary ?? 'auto',
+            toolVisibility: currentBinding?.toolVisibility ?? 'important',
             phase: command.collaborationMode === 'plan' ? 'planning' : 'executing',
             attention: 'none',
             lastForwardedSeq: null,
@@ -269,7 +377,13 @@ export class FeishuBridgeController {
             return
         }
 
-        this.options.store.feishuThreads.deleteThreadsBySessionId(this.namespace, access.sessionId)
+        const isSameThreadBinding = currentBinding !== null
+            && currentBinding.chatId === event.chatId
+            && currentBinding.rootMessageId === event.threadRootMessageId
+            && currentBinding.sessionId === access.sessionId
+        if (!isSameThreadBinding) {
+            this.options.store.feishuThreads.deleteThreadsBySessionId(this.namespace, access.sessionId)
+        }
 
         const latestMessage = this.options.store.messages.getMessages(access.sessionId, 1).at(-1) ?? null
         const baseBinding = this.options.store.feishuThreads.upsertThread({
@@ -285,6 +399,8 @@ export class FeishuBridgeController {
             permissionMode: normalizePermissionMode(access.session.permissionMode, currentBinding?.permissionMode),
             collaborationMode: access.session.collaborationMode ?? currentBinding?.collaborationMode ?? 'default',
             deliveryMode: currentBinding?.deliveryMode ?? 'foreground',
+            reasoningSummary: currentBinding?.reasoningSummary ?? 'auto',
+            toolVisibility: currentBinding?.toolVisibility ?? 'important',
             phase: (access.session.collaborationMode ?? currentBinding?.collaborationMode) === 'plan' ? 'planning' : 'executing',
             attention: 'none',
             lastForwardedSeq: latestMessage?.seq ?? null,
@@ -294,13 +410,9 @@ export class FeishuBridgeController {
 
         const sync = this.synchronizer.syncSession(baseBinding, access.session)
         for (const request of sync.openRequests) {
-            const prompt = formatRequestPrompt(request)
-            const reply = await this.options.client.replyMessage({
+            const reply = await this.options.client.replyCardMessage({
                 messageId: sync.binding.rootMessageId,
-                msgType: 'text',
-                content: {
-                    text: prompt
-                }
+                card: renderOpenRequestCard(request)
             })
             this.options.store.feishuRequests.upsertRequest({
                 namespace: request.namespace,
@@ -401,6 +513,7 @@ export class FeishuBridgeController {
                 target.request.sessionId,
                 target.request.requestId
             )
+            await this.syncResolvedRequestCard(target.request, 'Answered')
             await this.replyText(event.messageId, `Answered request ${target.request.shortToken}.`)
             return
         }
@@ -470,6 +583,18 @@ export class FeishuBridgeController {
                     await this.replyText(event.messageId, `Permission mode set to ${parsed.command.permissionMode}.`)
                     return
                 }
+                case 'set-reasoning-summary':
+                    this.updateBinding(binding, {
+                        reasoningSummary: parsed.command.reasoningSummary
+                    })
+                    await this.replyText(event.messageId, `Reasoning summary set to ${parsed.command.reasoningSummary}.`)
+                    return
+                case 'set-tool-visibility':
+                    this.updateBinding(binding, {
+                        toolVisibility: parsed.command.toolVisibility
+                    })
+                    await this.replyText(event.messageId, `Tool visibility set to ${parsed.command.toolVisibility}.`)
+                    return
                 case 'set-collaboration-mode': {
                     const sessionId = await this.ensureActiveSession(binding, event.messageId)
                     if (!sessionId) {
@@ -542,6 +667,14 @@ export class FeishuBridgeController {
                         target.request.sessionId,
                         target.request.requestId
                     )
+                    await this.syncResolvedRequestCard(
+                        target.request,
+                        parsed.command.decision === 'approved' || parsed.command.decision === 'approved_for_session'
+                            ? 'Approved'
+                            : parsed.command.decision === 'denied'
+                                ? 'Denied'
+                                : 'Aborted'
+                    )
                     return
                 }
                 case 'choose': {
@@ -570,6 +703,7 @@ export class FeishuBridgeController {
                         target.request.sessionId,
                         target.request.requestId
                     )
+                    await this.syncResolvedRequestCard(target.request, 'Answered')
                     await this.replyText(event.messageId, `Answered request ${target.request.shortToken}.`)
                     return
                 }
@@ -615,6 +749,8 @@ export class FeishuBridgeController {
                 permissionMode: binding.permissionMode,
                 collaborationMode: binding.collaborationMode,
                 deliveryMode: binding.deliveryMode,
+                reasoningSummary: binding.reasoningSummary,
+                toolVisibility: binding.toolVisibility,
                 phase: binding.phase,
                 attention: binding.attention,
                 lastForwardedSeq: binding.lastForwardedSeq,
@@ -644,6 +780,8 @@ export class FeishuBridgeController {
             permissionMode: updates.permissionMode ?? binding.permissionMode,
             collaborationMode: updates.collaborationMode ?? binding.collaborationMode,
             deliveryMode: updates.deliveryMode ?? binding.deliveryMode,
+            reasoningSummary: updates.reasoningSummary ?? binding.reasoningSummary,
+            toolVisibility: updates.toolVisibility ?? binding.toolVisibility,
             phase: updates.phase ?? binding.phase,
             attention: updates.attention ?? binding.attention,
             lastForwardedSeq: updates.lastForwardedSeq ?? binding.lastForwardedSeq,
@@ -730,6 +868,30 @@ export class FeishuBridgeController {
         return { ok: true, request: filtered[0] }
     }
 
+    private async syncResolvedRequestCard(
+        request: ReturnType<Store['feishuRequests']['listOpenRequestsForSession']>[number],
+        resolutionText: string,
+        callbackToken?: string
+    ): Promise<void> {
+        const card = renderResolvedRequestCard(request, resolutionText)
+        if (callbackToken) {
+            await this.options.client.updateInteractiveCard({
+                token: callbackToken,
+                card
+            })
+            return
+        }
+
+        if (!request.feishuMessageId) {
+            return
+        }
+
+        await this.options.client.patchMessageCard({
+            messageId: request.feishuMessageId,
+            card
+        })
+    }
+
     private async replyText(messageId: string, text: string): Promise<void> {
         await this.options.client.replyMessage({
             messageId,
@@ -772,6 +934,8 @@ export class FeishuBridgeController {
             `Machine: ${binding.machineId ?? '(unknown)'}`,
             `Model: ${model}`,
             `Permission: ${permissionMode}`,
+            `Reasoning summary: ${binding.reasoningSummary}`,
+            `Tool visibility: ${binding.toolVisibility}`,
             `Thread root: ${binding.rootMessageId}`
         ]
         return lines.join('\n')
@@ -785,10 +949,20 @@ function extractTextMessage(event: FeishuInboundMessageEvent): string | null {
 
     try {
         const parsed = JSON.parse(event.content) as { text?: unknown }
-        return typeof parsed.text === 'string' ? parsed.text : null
+        return asString(parsed.text)
     } catch {
         return null
     }
+}
+
+function asString(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function asRequestDecision(value: unknown): 'approved' | 'approved_for_session' | 'denied' | 'abort' | null {
+    return value === 'approved' || value === 'approved_for_session' || value === 'denied' || value === 'abort'
+        ? value
+        : null
 }
 
 function resolveMachineId(machines: Array<{ id: string }>): string | null {

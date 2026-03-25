@@ -1,3 +1,13 @@
+import type {
+    FeishuMessageHandle,
+    FeishuPatchMessageCardArgs,
+    FeishuReplyCardMessageArgs,
+    FeishuReplyMessageArgs,
+    FeishuSendCardMessageArgs,
+    FeishuSendMessageArgs,
+    FeishuUpdateInteractiveCardArgs
+} from './types'
+
 type FeishuClientOptions = {
     appId: string
     appSecret: string
@@ -64,16 +74,7 @@ export class FeishuClient {
         return json.tenant_access_token
     }
 
-    async sendMessage(args: {
-        receiveIdType: 'chat_id' | 'open_id' | 'email' | 'union_id' | 'user_id'
-        receiveId: string
-        msgType: string
-        content: Record<string, unknown>
-    }): Promise<{
-        messageId: string
-        rootId: string | null
-        parentId: string | null
-    }> {
+    async sendMessage(args: FeishuSendMessageArgs): Promise<FeishuMessageHandle> {
         const token = await this.getTenantAccessToken()
         const response = await this.fetchFn(
             `${this.baseUrl}/im/v1/messages?receive_id_type=${encodeURIComponent(args.receiveIdType)}`,
@@ -94,15 +95,7 @@ export class FeishuClient {
         return await parseMessageResponse(response)
     }
 
-    async replyMessage(args: {
-        messageId: string
-        msgType: string
-        content: Record<string, unknown>
-    }): Promise<{
-        messageId: string
-        rootId: string | null
-        parentId: string | null
-    }> {
+    async replyMessage(args: FeishuReplyMessageArgs): Promise<FeishuMessageHandle> {
         const token = await this.getTenantAccessToken()
         const response = await this.fetchFn(
             `${this.baseUrl}/im/v1/messages/${encodeURIComponent(args.messageId)}/reply`,
@@ -121,22 +114,74 @@ export class FeishuClient {
 
         return await parseMessageResponse(response)
     }
+
+    async sendCardMessage(args: FeishuSendCardMessageArgs): Promise<FeishuMessageHandle> {
+        return await this.sendMessage({
+            receiveIdType: args.receiveIdType,
+            receiveId: args.receiveId,
+            msgType: 'interactive',
+            content: args.card
+        })
+    }
+
+    async replyCardMessage(args: FeishuReplyCardMessageArgs): Promise<FeishuMessageHandle> {
+        return await this.replyMessage({
+            messageId: args.messageId,
+            msgType: 'interactive',
+            content: args.card
+        })
+    }
+
+    async patchMessageCard(args: FeishuPatchMessageCardArgs): Promise<void> {
+        const token = await this.getTenantAccessToken()
+        const response = await this.fetchFn(
+            `${this.baseUrl}/im/v1/messages/${encodeURIComponent(args.messageId)}`,
+            {
+                method: 'PATCH',
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'content-type': 'application/json; charset=utf-8'
+                },
+                body: JSON.stringify({
+                    content: JSON.stringify(args.card)
+                })
+            }
+        )
+
+        await parseOkResponse(response, 'Failed to patch Feishu message card')
+    }
+
+    async updateInteractiveCard(args: FeishuUpdateInteractiveCardArgs): Promise<void> {
+        const token = await this.getTenantAccessToken()
+        const response = await this.fetchFn(
+            `${this.baseUrl}/interactive/v1/card/update`,
+            {
+                method: 'POST',
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    'content-type': 'application/json; charset=utf-8'
+                },
+                body: JSON.stringify({
+                    token: args.token,
+                    card: args.card
+                })
+            }
+        )
+
+        await parseOkResponse(response, 'Failed to update Feishu interactive card')
+    }
 }
 
-async function parseMessageResponse(response: Response): Promise<{
-    messageId: string
-    rootId: string | null
-    parentId: string | null
-}> {
-    const json = await response.json() as FeishuApiEnvelope<{
+async function parseMessageResponse(response: Response): Promise<FeishuMessageHandle> {
+    const json = await parseOkResponse<{
         message_id?: unknown
         root_id?: unknown
         parent_id?: unknown
-    }>
+    }>(response, 'Failed to send Feishu message')
 
     const messageId = typeof json.data?.message_id === 'string' ? json.data.message_id : null
-    if (!response.ok || json.code !== 0 || !messageId) {
-        throw new Error(json.msg || 'Failed to send Feishu message')
+    if (!messageId) {
+        throw new Error('Failed to send Feishu message')
     }
 
     return {
@@ -144,4 +189,14 @@ async function parseMessageResponse(response: Response): Promise<{
         rootId: typeof json.data?.root_id === 'string' ? json.data.root_id : null,
         parentId: typeof json.data?.parent_id === 'string' ? json.data.parent_id : null
     }
+}
+
+async function parseOkResponse<T>(response: Response, fallbackMessage: string): Promise<FeishuApiEnvelope<T>> {
+    const json = await response.json() as FeishuApiEnvelope<T>
+
+    if (!response.ok || json.code !== 0) {
+        throw new Error(json.msg || fallbackMessage)
+    }
+
+    return json
 }

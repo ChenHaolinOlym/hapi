@@ -3,6 +3,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { FeishuEventStore } from './feishuEventStore'
+import { FeishuItemStore } from './feishuItemStore'
 import { FeishuRequestStore } from './feishuRequestStore'
 import { FeishuThreadStore } from './feishuThreadStore'
 import { MachineStore } from './machineStore'
@@ -12,6 +13,8 @@ import { SessionStore } from './sessionStore'
 import { UserStore } from './userStore'
 
 export type {
+    FeishuItemUpsertInput,
+    StoredFeishuItem,
     StoredFeishuRequest,
     StoredFeishuSeenEvent,
     StoredFeishuThread,
@@ -23,6 +26,7 @@ export type {
     VersionedUpdateResult
 } from './types'
 export { FeishuEventStore } from './feishuEventStore'
+export { FeishuItemStore } from './feishuItemStore'
 export { FeishuRequestStore } from './feishuRequestStore'
 export { FeishuThreadStore } from './feishuThreadStore'
 export { MachineStore } from './machineStore'
@@ -31,13 +35,14 @@ export { PushStore } from './pushStore'
 export { SessionStore } from './sessionStore'
 export { UserStore } from './userStore'
 
-const SCHEMA_VERSION: number = 7
+const SCHEMA_VERSION: number = 11
 const REQUIRED_TABLES = [
     'sessions',
     'machines',
     'messages',
     'users',
     'push_subscriptions',
+    'feishu_items',
     'feishu_threads',
     'feishu_requests',
     'feishu_seen_events'
@@ -52,6 +57,7 @@ export class Store {
     readonly messages: MessageStore
     readonly users: UserStore
     readonly push: PushStore
+    readonly feishuItems: FeishuItemStore
     readonly feishuThreads: FeishuThreadStore
     readonly feishuRequests: FeishuRequestStore
     readonly feishuEvents: FeishuEventStore
@@ -96,6 +102,7 @@ export class Store {
         this.messages = new MessageStore(this.db)
         this.users = new UserStore(this.db)
         this.push = new PushStore(this.db)
+        this.feishuItems = new FeishuItemStore(this.db)
         this.feishuThreads = new FeishuThreadStore(this.db)
         this.feishuRequests = new FeishuRequestStore(this.db)
         this.feishuEvents = new FeishuEventStore(this.db)
@@ -155,6 +162,148 @@ export class Store {
 
         if (currentVersion === 6 && SCHEMA_VERSION === 7) {
             this.migrateFromV6ToV7()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 8) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 8) {
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 7 && SCHEMA_VERSION === 8) {
+            this.migrateFromV7ToV8()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 9) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 9) {
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 7 && SCHEMA_VERSION === 9) {
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 8 && SCHEMA_VERSION === 9) {
+            this.migrateFromV8ToV9()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 10) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 10) {
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 7 && SCHEMA_VERSION === 10) {
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 8 && SCHEMA_VERSION === 10) {
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 9 && SCHEMA_VERSION === 10) {
+            this.migrateFromV9ToV10()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 5 && SCHEMA_VERSION === 11) {
+            this.migrateFromV5ToV6()
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.migrateFromV10ToV11()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 6 && SCHEMA_VERSION === 11) {
+            this.migrateFromV6ToV7()
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.migrateFromV10ToV11()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 7 && SCHEMA_VERSION === 11) {
+            this.migrateFromV7ToV8()
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.migrateFromV10ToV11()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 8 && SCHEMA_VERSION === 11) {
+            this.migrateFromV8ToV9()
+            this.migrateFromV9ToV10()
+            this.migrateFromV10ToV11()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 9 && SCHEMA_VERSION === 11) {
+            this.migrateFromV9ToV10()
+            this.migrateFromV10ToV11()
+            this.setUserVersion(SCHEMA_VERSION)
+            return
+        }
+
+        if (currentVersion === 10 && SCHEMA_VERSION === 11) {
+            this.migrateFromV10ToV11()
             this.setUserVersion(SCHEMA_VERSION)
             return
         }
@@ -240,6 +389,24 @@ export class Store {
             );
             CREATE INDEX IF NOT EXISTS idx_push_subscriptions_namespace ON push_subscriptions(namespace);
 
+            CREATE TABLE IF NOT EXISTS feishu_items (
+                namespace TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                root_message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                item_key TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                source_id TEXT,
+                feishu_message_id TEXT,
+                render_state_json TEXT,
+                render_version INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (namespace, root_message_id, item_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_items_session ON feishu_items(namespace, session_id, updated_at);
+
             CREATE TABLE IF NOT EXISTS feishu_threads (
                 namespace TEXT NOT NULL,
                 chat_id TEXT NOT NULL,
@@ -253,6 +420,8 @@ export class Store {
                 permission_mode TEXT NOT NULL,
                 collaboration_mode TEXT NOT NULL,
                 delivery_mode TEXT NOT NULL,
+                reasoning_summary TEXT NOT NULL DEFAULT 'auto',
+                tool_visibility TEXT NOT NULL DEFAULT 'important',
                 phase TEXT NOT NULL,
                 attention TEXT NOT NULL,
                 last_forwarded_seq INTEGER,
@@ -452,10 +621,112 @@ export class Store {
     }
 
     private migrateFromV6ToV7(): void {
-        const rows = this.db.prepare('PRAGMA table_info(feishu_threads)').all() as Array<{ name: string }>
-        const columns = new Set(rows.map((row) => row.name))
+        const columns = this.getFeishuThreadColumnNames()
         if (!columns.has('active_turn_seq')) {
             this.db.exec('ALTER TABLE feishu_threads ADD COLUMN active_turn_seq INTEGER')
+        }
+    }
+
+    private migrateFromV7ToV8(): void {
+        const columns = this.getFeishuThreadColumnNames()
+        if (!columns.has('reasoning_summary')) {
+            this.db.exec("ALTER TABLE feishu_threads ADD COLUMN reasoning_summary TEXT NOT NULL DEFAULT 'auto'")
+        }
+        if (!columns.has('tool_visibility')) {
+            this.db.exec("ALTER TABLE feishu_threads ADD COLUMN tool_visibility TEXT NOT NULL DEFAULT 'important'")
+        }
+    }
+
+    private migrateFromV8ToV9(): void {
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS feishu_items (
+                namespace TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                root_message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                item_key TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                source_id TEXT,
+                feishu_message_id TEXT,
+                render_state_json TEXT,
+                render_version INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (namespace, root_message_id, item_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feishu_items_session ON feishu_items(namespace, session_id, updated_at);
+        `)
+    }
+
+    private migrateFromV9ToV10(): void {
+        const rows = this.db.prepare('PRAGMA table_info(feishu_items)').all() as Array<{ name: string }>
+        const columns = new Set(rows.map((row) => row.name))
+        if (!columns.has('source_id')) {
+            this.db.exec('ALTER TABLE feishu_items ADD COLUMN source_id TEXT')
+        }
+        this.normalizeLegacyFeishuItemCreatedAt()
+    }
+
+    private migrateFromV10ToV11(): void {
+        const rows = this.db.prepare('PRAGMA table_info(feishu_items)').all() as Array<{ name: string }>
+        const columns = new Set(rows.map((row) => row.name))
+        if (!columns.has('render_state_json')) {
+            this.db.exec('ALTER TABLE feishu_items ADD COLUMN render_state_json TEXT')
+        }
+    }
+
+    private normalizeLegacyFeishuItemCreatedAt(): void {
+        const rows = this.db.prepare(`
+            SELECT rowid, namespace, root_message_id, created_at
+            FROM feishu_items
+            ORDER BY namespace ASC, root_message_id ASC, created_at ASC, rowid ASC
+        `).all() as Array<{
+            rowid: number
+            namespace: string
+            root_message_id: string
+            created_at: number
+        }>
+
+        if (rows.length === 0) {
+            return
+        }
+
+        const updateCreatedAt = this.db.prepare(`
+            UPDATE feishu_items
+            SET created_at = @created_at
+            WHERE rowid = @rowid
+        `)
+
+        let currentGroupKey: string | null = null
+        let lastCreatedAt: number | null = null
+
+        this.db.exec('BEGIN')
+        try {
+            for (const row of rows) {
+                const groupKey = `${row.namespace}\u0000${row.root_message_id}`
+                if (groupKey !== currentGroupKey) {
+                    currentGroupKey = groupKey
+                    lastCreatedAt = null
+                }
+
+                const normalizedCreatedAt: number = lastCreatedAt === null
+                    ? row.created_at
+                    : Math.max(row.created_at, lastCreatedAt + 1)
+
+                if (normalizedCreatedAt !== row.created_at) {
+                    updateCreatedAt.run({
+                        rowid: row.rowid,
+                        created_at: normalizedCreatedAt
+                    })
+                }
+
+                lastCreatedAt = normalizedCreatedAt
+            }
+            this.db.exec('COMMIT')
+        } catch (error) {
+            this.db.exec('ROLLBACK')
+            throw error
         }
     }
 
@@ -466,6 +737,11 @@ export class Store {
 
     private getMachineColumnNames(): Set<string> {
         const rows = this.db.prepare('PRAGMA table_info(machines)').all() as Array<{ name: string }>
+        return new Set(rows.map((row) => row.name))
+    }
+
+    private getFeishuThreadColumnNames(): Set<string> {
+        const rows = this.db.prepare('PRAGMA table_info(feishu_threads)').all() as Array<{ name: string }>
         return new Set(rows.map((row) => row.name))
     }
 

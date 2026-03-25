@@ -5,11 +5,15 @@ import type {
     FeishuChatCommand,
     FeishuChatInput,
     FeishuCommandParseContext,
+    FeishuReasoningSummary,
     FeishuRequestDecision,
+    FeishuToolVisibility,
     ParsedFeishuCommand
 } from './types'
 
 const CODEX_PERMISSION_MODES: CodexPermissionMode[] = ['default', 'read-only', 'safe-yolo', 'yolo']
+const FEISHU_REASONING_SUMMARIES: FeishuReasoningSummary[] = ['auto', 'none', 'brief', 'detailed']
+const FEISHU_TOOL_VISIBILITIES: FeishuToolVisibility[] = ['off', 'important', 'all']
 const FEISHU_THREAD_COMMANDS = new Set([
     '/perm',
     '/stop',
@@ -66,13 +70,10 @@ export function parseFeishuChatInput(text: string, context: FeishuCommandParseCo
     }
 
     if (head === '/status') {
-        if (tokenized.tokens.length !== 1) {
-            return {
-                kind: 'error',
-                error: 'Unexpected arguments for /status'
-            }
+        return {
+            kind: 'error',
+            error: 'Unknown command: /status'
         }
-        return command({ type: 'status' })
     }
 
     if (head === '/hapi') {
@@ -143,6 +144,15 @@ function parseGlobalCommand(tokens: string[], originalText: string): FeishuChatI
     if (subcommand === 'new') {
         return parseCreateSessionCommand(tokens.slice(2))
     }
+    if (subcommand === 'status') {
+        if (tokens.length !== 2) {
+            return {
+                kind: 'error',
+                error: 'Unexpected arguments for /hapi status'
+            }
+        }
+        return command({ type: 'status' })
+    }
     if (subcommand === 'list') {
         return parseListSessionsCommand(tokens.slice(2))
     }
@@ -155,11 +165,45 @@ function parseGlobalCommand(tokens: string[], originalText: string): FeishuChatI
     if (subcommand === 'unattach' && (tokens.length === 2 || tokens.length === 3)) {
         return command({ type: 'unattach-session', sessionId: tokens[2] ?? null })
     }
+    if (subcommand === 'reasoning') {
+        return parseReasoningSummaryCommand(tokens.slice(2))
+    }
+    if (subcommand === 'tools') {
+        return parseToolVisibilityCommand(tokens.slice(2))
+    }
 
     return {
         kind: 'error',
         error: 'Unknown /hapi command'
     }
+}
+
+function parseReasoningSummaryCommand(tokens: string[]): FeishuChatInput {
+    if (tokens.length !== 1 || !isFeishuReasoningSummary(tokens[0])) {
+        return {
+            kind: 'error',
+            error: 'Expected /hapi reasoning <auto|none|brief|detailed>'
+        }
+    }
+
+    return command({
+        type: 'set-reasoning-summary',
+        reasoningSummary: tokens[0]
+    })
+}
+
+function parseToolVisibilityCommand(tokens: string[]): FeishuChatInput {
+    if (tokens.length !== 1 || !isFeishuToolVisibility(tokens[0])) {
+        return {
+            kind: 'error',
+            error: 'Expected /hapi tools <off|important|all>'
+        }
+    }
+
+    return command({
+        type: 'set-tool-visibility',
+        toolVisibility: tokens[0]
+    })
 }
 
 function parseListSessionsCommand(tokens: string[]): FeishuChatInput {
@@ -508,6 +552,14 @@ function isFeishuPermissionMode(value: string): value is CodexPermissionMode {
     return CODEX_PERMISSION_MODES.includes(value as CodexPermissionMode)
 }
 
+function isFeishuReasoningSummary(value: string): value is FeishuReasoningSummary {
+    return FEISHU_REASONING_SUMMARIES.includes(value as FeishuReasoningSummary)
+}
+
+function isFeishuToolVisibility(value: string): value is FeishuToolVisibility {
+    return FEISHU_TOOL_VISIBILITIES.includes(value as FeishuToolVisibility)
+}
+
 function command(commandValue: FeishuChatCommand): FeishuChatInput {
     return {
         kind: 'command',
@@ -519,7 +571,7 @@ function mapParsedCommand(commandValue: FeishuChatCommand): ParsedFeishuCommand 
     switch (commandValue.type) {
         case 'status':
             return {
-                scope: 'chat',
+                scope: 'global',
                 kind: 'status'
             }
         case 'new-session':
@@ -576,6 +628,18 @@ function mapParsedCommand(commandValue: FeishuChatCommand): ParsedFeishuCommand 
                 scope: 'thread',
                 kind: 'set-permission-mode',
                 permissionMode: commandValue.permissionMode
+            }
+        case 'set-reasoning-summary':
+            return {
+                scope: 'thread',
+                kind: 'set-reasoning-summary',
+                reasoningSummary: commandValue.reasoningSummary
+            }
+        case 'set-tool-visibility':
+            return {
+                scope: 'thread',
+                kind: 'set-tool-visibility',
+                toolVisibility: commandValue.toolVisibility
             }
         case 'stop-session':
             return {

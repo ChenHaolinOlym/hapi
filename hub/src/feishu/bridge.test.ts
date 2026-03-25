@@ -50,6 +50,8 @@ describe('FeishuBridgeStateSynchronizer', () => {
             permissionMode: 'default',
             collaborationMode: 'default',
             deliveryMode: 'background',
+            reasoningSummary: 'detailed',
+            toolVisibility: 'off',
             phase: 'executing',
             attention: 'none',
             lastForwardedSeq: null,
@@ -81,6 +83,13 @@ describe('FeishuBridgeStateSynchronizer', () => {
             collaborationMode: 'plan',
             phase: 'planning',
             deliveryMode: 'foreground',
+            attention: 'question',
+            reasoningSummary: 'detailed',
+            toolVisibility: 'off'
+        })
+        expect(store.feishuThreads.getThread('default', 'chat-1', 'root-1')).toMatchObject({
+            reasoningSummary: 'detailed',
+            toolVisibility: 'off',
             attention: 'question'
         })
 

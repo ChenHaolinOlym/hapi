@@ -72,10 +72,27 @@ describe('parseFeishuCommand', () => {
         })
     })
 
-    it('parses /status as a chat-level command', () => {
-        expect(parseFeishuCommand('/status')).toEqual({
-            scope: 'chat',
+    it('parses /hapi status and rejects bare /status', () => {
+        expect(parseFeishuCommand('/hapi status')).toEqual({
+            scope: 'global',
             kind: 'status'
+        })
+        expect(parseFeishuCommand('/status')).toEqual({
+            scope: 'error',
+            message: 'Unknown command: /status'
+        })
+    })
+
+    it('parses thread display setting commands', () => {
+        expect(parseFeishuCommand('/hapi reasoning brief')).toEqual({
+            scope: 'thread',
+            kind: 'set-reasoning-summary',
+            reasoningSummary: 'brief'
+        })
+        expect(parseFeishuCommand('/hapi tools important')).toEqual({
+            scope: 'thread',
+            kind: 'set-tool-visibility',
+            toolVisibility: 'important'
         })
     })
 

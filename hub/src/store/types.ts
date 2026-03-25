@@ -72,6 +72,8 @@ export type StoredFeishuThread = {
     permissionMode: 'default' | 'read-only' | 'safe-yolo' | 'yolo'
     collaborationMode: 'default' | 'plan'
     deliveryMode: 'foreground' | 'background'
+    reasoningSummary: 'auto' | 'none' | 'brief' | 'detailed'
+    toolVisibility: 'off' | 'important' | 'all'
     phase: 'planning' | 'executing'
     attention: 'none' | 'approval' | 'question' | 'failure' | 'completion'
     lastForwardedSeq: number | null
@@ -80,6 +82,34 @@ export type StoredFeishuThread = {
     createdAt: number
     updatedAt: number
 }
+
+export type FeishuThreadUpsertInput =
+    Omit<StoredFeishuThread, 'createdAt' | 'updatedAt' | 'reasoningSummary' | 'toolVisibility'>
+    & Partial<Pick<StoredFeishuThread, 'reasoningSummary' | 'toolVisibility'>>
+
+export type FeishuItemType = 'reasoning' | 'response' | 'tool' | 'decision'
+
+export type FeishuItemStatus = 'active' | 'completed' | 'failed'
+
+export type StoredFeishuItem = {
+    namespace: string
+    chatId: string
+    rootMessageId: string
+    sessionId: string
+    itemKey: string
+    itemType: FeishuItemType
+    status: FeishuItemStatus
+    sourceId: string | null
+    feishuMessageId: string | null
+    renderStateJson: string | null
+    renderVersion: number
+    createdAt: number
+    updatedAt: number
+}
+
+export type FeishuItemUpsertInput =
+    Omit<StoredFeishuItem, 'createdAt' | 'updatedAt' | 'sourceId' | 'renderStateJson'>
+    & Partial<Pick<StoredFeishuItem, 'sourceId' | 'renderStateJson'>>
 
 export type StoredFeishuRequest = {
     namespace: string

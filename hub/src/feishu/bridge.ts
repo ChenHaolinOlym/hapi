@@ -97,6 +97,8 @@ export class FeishuBridgeStateSynchronizer {
             permissionMode: nextPermissionMode,
             collaborationMode: nextCollaborationMode,
             deliveryMode: nextDeliveryMode,
+            reasoningSummary: binding.reasoningSummary,
+            toolVisibility: binding.toolVisibility,
             phase: nextCollaborationMode === 'plan' ? 'planning' : 'executing',
             attention: nextAttention,
             lastForwardedSeq: binding.lastForwardedSeq,

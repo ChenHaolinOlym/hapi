@@ -1,6 +1,9 @@
 import type { Database } from 'bun:sqlite'
 
-import type { StoredFeishuThread } from './types'
+import type { FeishuThreadUpsertInput, StoredFeishuThread } from './types'
+
+const DEFAULT_REASONING_SUMMARY: StoredFeishuThread['reasoningSummary'] = 'auto'
+const DEFAULT_TOOL_VISIBILITY: StoredFeishuThread['toolVisibility'] = 'important'
 
 type DbFeishuThreadRow = {
     namespace: string
@@ -15,6 +18,8 @@ type DbFeishuThreadRow = {
     permission_mode: string
     collaboration_mode: string
     delivery_mode: string
+    reasoning_summary: string
+    tool_visibility: string
     phase: string
     attention: string
     last_forwarded_seq: number | null
@@ -38,6 +43,8 @@ function toStoredFeishuThread(row: DbFeishuThreadRow): StoredFeishuThread {
         permissionMode: row.permission_mode as StoredFeishuThread['permissionMode'],
         collaborationMode: row.collaboration_mode as StoredFeishuThread['collaborationMode'],
         deliveryMode: row.delivery_mode as StoredFeishuThread['deliveryMode'],
+        reasoningSummary: (row.reasoning_summary ?? DEFAULT_REASONING_SUMMARY) as StoredFeishuThread['reasoningSummary'],
+        toolVisibility: (row.tool_visibility ?? DEFAULT_TOOL_VISIBILITY) as StoredFeishuThread['toolVisibility'],
         phase: row.phase as StoredFeishuThread['phase'],
         attention: row.attention as StoredFeishuThread['attention'],
         lastForwardedSeq: row.last_forwarded_seq,
@@ -114,19 +121,23 @@ export function getFeishuThreadsForChat(
 
 export function upsertFeishuThread(
     db: Database,
-    binding: Omit<StoredFeishuThread, 'createdAt' | 'updatedAt'>
+    binding: FeishuThreadUpsertInput
 ): StoredFeishuThread {
     const now = Date.now()
+    const reasoningSummary = binding.reasoningSummary ?? DEFAULT_REASONING_SUMMARY
+    const toolVisibility = binding.toolVisibility ?? DEFAULT_TOOL_VISIBILITY
     db.prepare(`
         INSERT INTO feishu_threads (
             namespace, chat_id, root_message_id, session_id, operator_open_id,
             machine_id, repo_path, session_name, model, permission_mode,
-            collaboration_mode, delivery_mode, phase, attention,
+            collaboration_mode, delivery_mode, reasoning_summary, tool_visibility,
+            phase, attention,
             last_forwarded_seq, active_turn_seq, last_seen_ready_at, created_at, updated_at
         ) VALUES (
             @namespace, @chat_id, @root_message_id, @session_id, @operator_open_id,
             @machine_id, @repo_path, @session_name, @model, @permission_mode,
-            @collaboration_mode, @delivery_mode, @phase, @attention,
+            @collaboration_mode, @delivery_mode, @reasoning_summary, @tool_visibility,
+            @phase, @attention,
             @last_forwarded_seq, @active_turn_seq, @last_seen_ready_at, @created_at, @updated_at
         )
         ON CONFLICT(namespace, chat_id, root_message_id) DO UPDATE SET
@@ -139,6 +150,8 @@ export function upsertFeishuThread(
             permission_mode = excluded.permission_mode,
             collaboration_mode = excluded.collaboration_mode,
             delivery_mode = excluded.delivery_mode,
+            reasoning_summary = excluded.reasoning_summary,
+            tool_visibility = excluded.tool_visibility,
             phase = excluded.phase,
             attention = excluded.attention,
             last_forwarded_seq = excluded.last_forwarded_seq,
@@ -158,6 +171,8 @@ export function upsertFeishuThread(
         permission_mode: binding.permissionMode,
         collaboration_mode: binding.collaborationMode,
         delivery_mode: binding.deliveryMode,
+        reasoning_summary: reasoningSummary,
+        tool_visibility: toolVisibility,
         phase: binding.phase,
         attention: binding.attention,
         last_forwarded_seq: binding.lastForwardedSeq,
@@ -196,5 +211,30 @@ export function deleteFeishuThreadsBySessionId(
         DELETE FROM feishu_threads
         WHERE namespace = ? AND session_id = ?
     `).run(namespace, sessionId)
+    return Number(result.changes ?? 0)
+}
+
+export function reassignFeishuThreadsSessionId(
+    db: Database,
+    namespace: string,
+    fromSessionId: string,
+    toSessionId: string
+): number {
+    if (fromSessionId === toSessionId) {
+        return 0
+    }
+
+    const result = db.prepare(`
+        UPDATE feishu_threads
+        SET session_id = @to_session_id,
+            updated_at = @updated_at
+        WHERE namespace = @namespace
+          AND session_id = @from_session_id
+    `).run({
+        namespace,
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        updated_at: Date.now()
+    })
     return Number(result.changes ?? 0)
 }

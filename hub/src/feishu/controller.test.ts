@@ -60,6 +60,9 @@ function createHarness(options?: {
 }) {
     const store = new Store(':memory:')
     const replied: Array<{ messageId: string; text: string }> = []
+    const repliedCards: Array<{ messageId: string; card: Record<string, unknown> }> = []
+    const patchedCards: Array<{ messageId: string; card: Record<string, unknown> }> = []
+    const updatedInteractiveCards: Array<{ token: string; card: Record<string, unknown> }> = []
     const namespace = options?.namespace ?? 'default'
     const syncCalls = {
         checkPathsExist: [] as Array<[string, string[]]>,
@@ -228,6 +231,38 @@ function createHarness(options?: {
                 rootId: args.messageId,
                 parentId: args.messageId
             }
+        },
+        replyCardMessage: async (args: {
+            messageId: string
+            card: Record<string, unknown>
+        }) => {
+            repliedCards.push({
+                messageId: args.messageId,
+                card: args.card
+            })
+            return {
+                messageId: 'om_card',
+                rootId: args.messageId,
+                parentId: args.messageId
+            }
+        },
+        patchMessageCard: async (args: {
+            messageId: string
+            card: Record<string, unknown>
+        }) => {
+            patchedCards.push({
+                messageId: args.messageId,
+                card: args.card
+            })
+        },
+        updateInteractiveCard: async (args: {
+            token: string
+            card: Record<string, unknown>
+        }) => {
+            updatedInteractiveCards.push({
+                token: args.token,
+                card: args.card
+            })
         }
     }
 
@@ -244,8 +279,43 @@ function createHarness(options?: {
         store,
         controller,
         replied,
+        repliedCards,
+        patchedCards,
+        updatedInteractiveCards,
+        sessionsById,
         syncCalls
     }
+}
+
+function cardText(card: Record<string, unknown>): string {
+    const parts: string[] = []
+    const header = (((card.header as Record<string, unknown> | undefined)?.title as Record<string, unknown> | undefined)?.content)
+    if (typeof header === 'string') {
+        parts.push(header)
+    }
+
+    const elements = Array.isArray(card.elements) ? card.elements : []
+    for (const element of elements) {
+        if (!element || typeof element !== 'object') {
+            continue
+        }
+
+        const text = (element as { text?: { content?: unknown } }).text
+        if (typeof text?.content === 'string') {
+            parts.push(text.content)
+        }
+
+        const actions = Array.isArray((element as { actions?: Array<{ text?: { content?: unknown } }> }).actions)
+            ? (element as { actions: Array<{ text?: { content?: unknown } }> }).actions
+            : []
+        for (const action of actions) {
+            if (typeof action?.text?.content === 'string') {
+                parts.push(action.text.content)
+            }
+        }
+    }
+
+    return parts.join('\n')
 }
 
 describe('FeishuBridgeController', () => {
@@ -584,6 +654,57 @@ describe('FeishuBridgeController', () => {
         ])
     })
 
+    it('keeps existing item state when attach targets the already-bound session', async () => {
+        const { controller, store, replied } = createHarness()
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root',
+            sessionId: 'session-1',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo',
+            sessionName: 'Bridge Session',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            phase: 'executing',
+            attention: 'none',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+        store.feishuItems.upsertItem({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root',
+            sessionId: 'session-1',
+            itemKey: 'status-card',
+            itemType: 'response',
+            status: 'completed',
+            feishuMessageId: 'om_card',
+            renderVersion: 1
+        })
+
+        await controller.handleMessageEvent(createTextEvent({
+            messageId: 'om_attach_same',
+            content: JSON.stringify({ text: '/hapi attach session-1' })
+        }))
+
+        expect(store.feishuItems.getItem('default', 'om_root', 'status-card')).toMatchObject({
+            sessionId: 'session-1',
+            feishuMessageId: 'om_card',
+            renderVersion: 1
+        })
+        expect(replied).toEqual([
+            {
+                messageId: 'om_attach_same',
+                text: expect.stringContaining('Attached thread to session session-1')
+            }
+        ])
+    })
+
     it('unattaches the current thread or all bindings for a session', async () => {
         const { controller, store, replied } = createHarness()
         store.feishuThreads.upsertThread({
@@ -652,12 +773,29 @@ describe('FeishuBridgeController', () => {
         ])
     })
 
-    it('reports unbound thread status with chat metadata', async () => {
+    it('rejects bare /status in favor of /hapi status', async () => {
         const { controller, replied } = createHarness()
 
         await controller.handleMessageEvent(createTextEvent({
             content: JSON.stringify({
                 text: '/status'
+            })
+        }))
+
+        expect(replied).toEqual([
+            {
+                messageId: 'om_root',
+                text: 'Unknown command: /status'
+            }
+        ])
+    })
+
+    it('reports unbound thread status with chat metadata', async () => {
+        const { controller, replied } = createHarness()
+
+        await controller.handleMessageEvent(createTextEvent({
+            content: JSON.stringify({
+                text: '/hapi status'
             })
         }))
 
@@ -673,7 +811,7 @@ describe('FeishuBridgeController', () => {
         ])
     })
 
-    it('reports bound thread status with session and cwd details', async () => {
+    it('reports bound thread status with session, cwd, and display settings', async () => {
         const { controller, store, replied } = createHarness()
         store.feishuThreads.upsertThread({
             namespace: 'default',
@@ -688,6 +826,8 @@ describe('FeishuBridgeController', () => {
             permissionMode: 'default',
             collaborationMode: 'default',
             deliveryMode: 'foreground',
+            reasoningSummary: 'brief',
+            toolVisibility: 'all',
             phase: 'executing',
             attention: 'none',
             lastForwardedSeq: 11,
@@ -699,7 +839,7 @@ describe('FeishuBridgeController', () => {
             messageId: 'om_reply',
             threadRootMessageId: 'om_root',
             content: JSON.stringify({
-                text: '/status'
+                text: '/hapi status'
             })
         }))
 
@@ -714,8 +854,61 @@ describe('FeishuBridgeController', () => {
                     'Machine: machine-1',
                     'Model: gpt-5.4',
                     'Permission: default',
+                    'Reasoning summary: brief',
+                    'Tool visibility: all',
                     'Thread root: om_root'
                 ].join('\n')
+            }
+        ])
+    })
+
+    it('updates bound thread display settings with explicit replies', async () => {
+        const { controller, store, replied } = createHarness()
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root',
+            sessionId: 'session-1',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo',
+            sessionName: 'Bridge Session',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            reasoningSummary: 'auto',
+            toolVisibility: 'important',
+            phase: 'executing',
+            attention: 'none',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+
+        await controller.handleMessageEvent(createTextEvent({
+            messageId: 'om_reply_1',
+            threadRootMessageId: 'om_root',
+            content: JSON.stringify({ text: '/hapi reasoning detailed' })
+        }))
+        await controller.handleMessageEvent(createTextEvent({
+            messageId: 'om_reply_2',
+            threadRootMessageId: 'om_root',
+            content: JSON.stringify({ text: '/hapi tools all' })
+        }))
+
+        expect(store.feishuThreads.getThread('default', 'oc_chat', 'om_root')).toMatchObject({
+            reasoningSummary: 'detailed',
+            toolVisibility: 'all'
+        })
+        expect(replied).toEqual([
+            {
+                messageId: 'om_reply_1',
+                text: 'Reasoning summary set to detailed.'
+            },
+            {
+                messageId: 'om_reply_2',
+                text: 'Tool visibility set to all.'
             }
         ])
     })
@@ -920,6 +1113,291 @@ describe('FeishuBridgeController', () => {
                 text: expect.stringContaining('Approved')
             }
         ])
+    })
+
+    it('replies with an interactive decision card for an open request when attaching a session', async () => {
+        const { controller, store, replied, repliedCards, sessionsById } = createHarness()
+        sessionsById.set('session-1', createSession({
+            agentState: {
+                requests: {
+                    'perm-1': {
+                        tool: 'CodexPatch',
+                        arguments: {
+                            file: 'README.md'
+                        },
+                        createdAt: 10
+                    }
+                },
+                completedRequests: {}
+            }
+        }))
+
+        await controller.handleMessageEvent(createTextEvent({
+            messageId: 'om_attach',
+            content: JSON.stringify({ text: '/hapi attach session-1' })
+        }))
+
+        expect(repliedCards).toHaveLength(1)
+        expect(cardText(repliedCards[0]!.card)).toContain('Approval needed')
+        expect(cardText(repliedCards[0]!.card)).toContain('Approve once')
+        expect(cardText(repliedCards[0]!.card)).toContain('Approve for session')
+        expect(cardText(repliedCards[0]!.card)).toContain('Deny')
+        expect(cardText(repliedCards[0]!.card)).toContain('Abort')
+        expect(store.feishuRequests.getRequest('default', 'session-1', 'perm-1')).toMatchObject({
+            feishuMessageId: 'om_card',
+            status: 'open'
+        })
+        expect(replied).toEqual([
+            {
+                messageId: 'om_attach',
+                text: expect.stringContaining('Attached thread')
+            }
+        ])
+    })
+
+    it('updates the same card through the delayed callback path when a permission action is clicked', async () => {
+        const { controller, store, syncCalls, updatedInteractiveCards } = createHarness()
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root',
+            sessionId: 'session-1',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo',
+            sessionName: 'Bridge Session',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            phase: 'executing',
+            attention: 'approval',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+        store.feishuRequests.upsertRequest({
+            namespace: 'default',
+            sessionId: 'session-1',
+            requestId: 'perm-1',
+            shortToken: 'ASK1',
+            kind: 'permission',
+            decisionScope: 'request',
+            answerShape: 'flat',
+            feishuMessageId: 'om_card',
+            requestJson: '{"tool":"CodexPatch"}',
+            status: 'open'
+        })
+
+        await (controller as unknown as {
+            handleCardActionEvent: (event: {
+                openId: string
+                callbackToken: string
+                action: Record<string, unknown>
+            }) => Promise<void>
+        }).handleCardActionEvent({
+            openId: 'ou_123',
+            callbackToken: 'c-token-1',
+            action: {
+                kind: 'resolve-request',
+                requestToken: 'ASK1',
+                decision: 'approved'
+            }
+        })
+
+        expect(syncCalls.approvePermission).toEqual([
+            ['session-1', 'perm-1', [undefined, undefined, 'approved', undefined]]
+        ])
+        expect(store.feishuRequests.getRequest('default', 'session-1', 'perm-1')).toMatchObject({
+            status: 'resolved'
+        })
+        expect(updatedInteractiveCards).toHaveLength(1)
+        expect(updatedInteractiveCards[0]?.token).toBe('c-token-1')
+        expect(cardText(updatedInteractiveCards[0]!.card)).toContain('Approved')
+    })
+
+    it('matches delayed callback actions to the card message before falling back to the short token', async () => {
+        const { controller, store, syncCalls, sessionsById } = createHarness()
+        sessionsById.set('session-2', createSession({
+            id: 'session-2',
+            active: true,
+            metadata: {
+                path: '/tmp/repo-2',
+                host: 'localhost',
+                name: 'Bridge Session 2',
+                flavor: 'codex'
+            }
+        }))
+
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root_1',
+            sessionId: 'session-1',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo',
+            sessionName: 'Bridge Session',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            phase: 'executing',
+            attention: 'approval',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root_2',
+            sessionId: 'session-2',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo-2',
+            sessionName: 'Bridge Session 2',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            phase: 'executing',
+            attention: 'approval',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+        store.feishuRequests.upsertRequest({
+            namespace: 'default',
+            sessionId: 'session-2',
+            requestId: 'perm-2',
+            shortToken: 'ASK1',
+            kind: 'permission',
+            decisionScope: 'request',
+            answerShape: 'flat',
+            feishuMessageId: 'om_card_2',
+            requestJson: '{"tool":"CodexExec"}',
+            status: 'open'
+        })
+        store.feishuRequests.upsertRequest({
+            namespace: 'default',
+            sessionId: 'session-1',
+            requestId: 'perm-1',
+            shortToken: 'ASK1',
+            kind: 'permission',
+            decisionScope: 'request',
+            answerShape: 'flat',
+            feishuMessageId: 'om_card_1',
+            requestJson: '{"tool":"CodexPatch"}',
+            status: 'open'
+        })
+
+        await (controller as unknown as {
+            handleCardActionEvent: (event: {
+                openId: string
+                callbackToken: string
+                messageId: string
+                chatId: string
+                action: Record<string, unknown>
+            }) => Promise<void>
+        }).handleCardActionEvent({
+            openId: 'ou_123',
+            callbackToken: 'c-token-2',
+            messageId: 'om_card_2',
+            chatId: 'oc_chat',
+            action: {
+                kind: 'resolve-request',
+                requestToken: 'ASK1',
+                decision: 'approved'
+            }
+        })
+
+        expect(syncCalls.approvePermission).toEqual([
+            ['session-2', 'perm-2', [undefined, undefined, 'approved', undefined]]
+        ])
+        expect(store.feishuRequests.getRequest('default', 'session-2', 'perm-2')).toMatchObject({
+            status: 'resolved'
+        })
+        expect(store.feishuRequests.getRequest('default', 'session-1', 'perm-1')).toMatchObject({
+            status: 'open'
+        })
+    })
+
+    it('updates the same card through the delayed callback path when a question choice is clicked', async () => {
+        const { controller, store, syncCalls, updatedInteractiveCards } = createHarness()
+        store.feishuThreads.upsertThread({
+            namespace: 'default',
+            chatId: 'oc_chat',
+            rootMessageId: 'om_root',
+            sessionId: 'session-1',
+            operatorOpenId: 'ou_123',
+            machineId: 'machine-1',
+            repoPath: '/tmp/repo',
+            sessionName: 'Bridge Session',
+            model: 'gpt-5.4',
+            permissionMode: 'default',
+            collaborationMode: 'default',
+            deliveryMode: 'foreground',
+            phase: 'executing',
+            attention: 'question',
+            lastForwardedSeq: null,
+            activeTurnSeq: null,
+            lastSeenReadyAt: null
+        })
+        store.feishuRequests.upsertRequest({
+            namespace: 'default',
+            sessionId: 'session-1',
+            requestId: 'question-1',
+            shortToken: 'ASK1',
+            kind: 'question',
+            decisionScope: 'request',
+            answerShape: 'nested',
+            feishuMessageId: 'om_card',
+            requestJson: JSON.stringify({
+                tool: 'request_user_input',
+                arguments: {
+                    questions: [
+                        { id: 'choice', question: 'Pick one', options: ['Red', 'Blue', 'Green'] }
+                    ]
+                }
+            }),
+            status: 'open'
+        })
+
+        await (controller as unknown as {
+            handleCardActionEvent: (event: {
+                openId: string
+                callbackToken: string
+                action: Record<string, unknown>
+            }) => Promise<void>
+        }).handleCardActionEvent({
+            openId: 'ou_123',
+            callbackToken: 'c-token-2',
+            action: {
+                kind: 'choose',
+                requestToken: 'ASK1',
+                value: 'B'
+            }
+        })
+
+        expect(syncCalls.approvePermission).toEqual([
+            ['session-1', 'question-1', [
+                undefined,
+                undefined,
+                'approved',
+                {
+                    choice: {
+                        answers: ['B']
+                    }
+                }
+            ]]
+        ])
+        expect(store.feishuRequests.getRequest('default', 'session-1', 'question-1')).toMatchObject({
+            status: 'resolved'
+        })
+        expect(updatedInteractiveCards).toHaveLength(1)
+        expect(updatedInteractiveCards[0]?.token).toBe('c-token-2')
+        expect(cardText(updatedInteractiveCards[0]!.card)).toContain('Answered')
     })
 
     it('answers nested request_user_input questions from explicit and implicit choices', async () => {

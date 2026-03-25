@@ -254,6 +254,7 @@ async function main() {
         socketEngine: socketServer.engine,
         corsOrigins,
         onFeishuMessageEvent: (event) => feishuBridgeController?.handleMessageEvent(event),
+        onFeishuCardActionEvent: (event) => feishuBridgeController?.handleCardActionEvent(event),
         relayMode: relayFlag.enabled,
         officialWebUrl
     })

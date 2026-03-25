@@ -30,6 +30,7 @@ function createApp(args?: {
     verificationToken?: string | null
     encryptKey?: string | null
     onMessageEvent?: (event: FeishuInboundMessageEvent) => Promise<void> | void
+    onCardActionEvent?: (event: Record<string, unknown>) => Promise<void> | void
 }) {
     const store = new Store(':memory:')
     const app = new Hono()
@@ -39,8 +40,9 @@ function createApp(args?: {
             verificationToken: args?.verificationToken ?? 'verify-token',
             encryptKey: args?.encryptKey ?? 'encrypt-key'
         },
-        onMessageEvent: args?.onMessageEvent
-    }))
+        onMessageEvent: args?.onMessageEvent,
+        onCardActionEvent: args?.onCardActionEvent
+    } as never))
     return { app, store }
 }
 
@@ -357,5 +359,91 @@ describe('Feishu callback routes', () => {
         expect(await response.json()).toEqual({
             error: 'Invalid Feishu callback signature'
         })
+    })
+
+    it('normalizes interactive card callbacks and deduplicates repeated actions', async () => {
+        const seenEvents: Array<Record<string, unknown>> = []
+        const { app, store } = createApp({
+            verificationToken: 'verify-token',
+            encryptKey: 'encrypt-key',
+            onCardActionEvent: (event) => {
+                seenEvents.push(event)
+            }
+        })
+
+        const plaintext = JSON.stringify({
+            schema: '2.0',
+            header: {
+                event_id: 'evt-card-1',
+                event_type: 'card.action.trigger',
+                token: 'verify-token',
+                create_time: '1700000010'
+            },
+            event: {
+                token: 'c-card-token',
+                operator: {
+                    operator_id: {
+                        open_id: 'ou_123'
+                    }
+                },
+                open_message_id: 'om_card',
+                open_chat_id: 'oc_chat',
+                action: {
+                    value: {
+                        kind: 'resolve-request',
+                        requestToken: 'ASK1',
+                        decision: 'approved'
+                    }
+                }
+            }
+        })
+        const rawBody = JSON.stringify({
+            encrypt: encryptPayload(plaintext, 'encrypt-key')
+        })
+        const timestamp = '1700000011'
+        const nonce = 'nonce-card-1'
+        const signature = signBody(rawBody, timestamp, nonce, 'encrypt-key')
+
+        const first = await app.request('/feishu/callback', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-lark-request-timestamp': timestamp,
+                'x-lark-request-nonce': nonce,
+                'x-lark-signature': signature
+            },
+            body: rawBody
+        })
+
+        expect(first.status).toBe(200)
+        expect(await first.text()).toBe('')
+        expect(seenEvents).toEqual([
+            {
+                callbackToken: 'c-card-token',
+                openId: 'ou_123',
+                messageId: 'om_card',
+                chatId: 'oc_chat',
+                action: {
+                    kind: 'resolve-request',
+                    requestToken: 'ASK1',
+                    decision: 'approved'
+                }
+            }
+        ])
+
+        const second = await app.request('/feishu/callback', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-lark-request-timestamp': timestamp,
+                'x-lark-request-nonce': nonce,
+                'x-lark-signature': signature
+            },
+            body: rawBody
+        })
+
+        expect(second.status).toBe(200)
+        expect(seenEvents).toHaveLength(1)
+        expect(store.feishuEvents.hasSeen('card', 'evt-card-1')).toBe(true)
     })
 })

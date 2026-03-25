@@ -1,6 +1,91 @@
 export type FeishuPermissionMode = 'default' | 'read-only' | 'safe-yolo' | 'yolo'
 
 export type FeishuChoiceValue = 'A' | 'B' | 'C' | 'yes' | 'no'
+export type FeishuReasoningSummary = 'auto' | 'none' | 'brief' | 'detailed'
+export type FeishuToolVisibility = 'off' | 'important' | 'all'
+export type FeishuReceiveIdType = 'chat_id' | 'open_id' | 'email' | 'union_id' | 'user_id'
+export type FeishuMessageContent = Record<string, unknown>
+export type FeishuCardViewModel = Record<string, unknown>
+export type FeishuCardItemStatus = 'active' | 'completed' | 'failed'
+
+export type FeishuReasoningCardModel = {
+    itemKey: string
+    itemType: 'reasoning'
+    status: FeishuCardItemStatus
+    reasoningSummary: FeishuReasoningSummary
+    text: string
+}
+
+export type FeishuToolCardModel = {
+    itemKey: string
+    itemType: 'tool'
+    status: FeishuCardItemStatus
+    toolVisibility: FeishuToolVisibility
+    toolName: string
+    summary: string
+    input?: unknown
+    output?: unknown
+}
+
+export type FeishuResponseCardModel = {
+    itemKey: string
+    itemType: 'response'
+    status: Extract<FeishuCardItemStatus, 'completed'>
+    text: string
+}
+
+export type FeishuItemCardModel =
+    | FeishuReasoningCardModel
+    | FeishuToolCardModel
+    | FeishuResponseCardModel
+
+export type FeishuMessageHandle = {
+    messageId: string
+    rootId: string | null
+    parentId: string | null
+}
+
+export type FeishuCardActionEvent = {
+    callbackToken: string
+    openId: string
+    messageId: string
+    chatId: string
+    action: Record<string, unknown>
+}
+
+export type FeishuSendMessageArgs = {
+    receiveIdType: FeishuReceiveIdType
+    receiveId: string
+    msgType: string
+    content: FeishuMessageContent
+}
+
+export type FeishuReplyMessageArgs = {
+    messageId: string
+    msgType: string
+    content: FeishuMessageContent
+}
+
+export type FeishuSendCardMessageArgs = {
+    receiveIdType: FeishuReceiveIdType
+    receiveId: string
+    card: FeishuCardViewModel
+}
+
+export type FeishuReplyCardMessageArgs = {
+    messageId: string
+    card: FeishuCardViewModel
+}
+
+export type FeishuPatchMessageCardArgs = {
+    messageId: string
+    card: FeishuCardViewModel
+}
+
+export type FeishuUpdateInteractiveCardArgs = {
+    token: string
+    card: FeishuCardViewModel
+}
 
 export type FeishuChatCommand =
     | {
@@ -44,6 +129,14 @@ export type FeishuChatCommand =
     | {
         type: 'set-permission-mode'
         permissionMode: FeishuPermissionMode
+    }
+    | {
+        type: 'set-reasoning-summary'
+        reasoningSummary: FeishuReasoningSummary
+    }
+    | {
+        type: 'set-tool-visibility'
+        toolVisibility: FeishuToolVisibility
     }
     | {
         type: 'stop-session'
@@ -92,7 +185,7 @@ export type FeishuRequestDecision = 'approved' | 'approved_for_session' | 'denie
 
 export type ParsedFeishuCommand =
     | {
-        scope: 'chat'
+        scope: 'global'
         kind: 'status'
     }
     | {
@@ -141,6 +234,16 @@ export type ParsedFeishuCommand =
         scope: 'thread'
         kind: 'set-permission-mode'
         permissionMode: FeishuPermissionMode
+    }
+    | {
+        scope: 'thread'
+        kind: 'set-reasoning-summary'
+        reasoningSummary: FeishuReasoningSummary
+    }
+    | {
+        scope: 'thread'
+        kind: 'set-tool-visibility'
+        toolVisibility: FeishuToolVisibility
     }
     | {
         scope: 'thread'
